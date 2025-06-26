@@ -1,0 +1,26 @@
+/* src/index.css */
+
+/* 1. Google Fonts @import - MUST BE AT THE VERY TOP */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* 2. TAILWIND V3 DIRECTIVES - THESE ARE CRITICAL FOR V3 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 3. Your custom CSS after Tailwind directives */
+body {
+    font-family: 'Inter', sans-serif;
+}
+
+.gradient-bg {
+    background: linear-gradient(135deg, #1a1a1a 0%, #000 100%);
+}
+
+.pulse-animation {
+    animation: pulse 2s infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}

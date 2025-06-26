@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Match any document within your specific application's data path
+    match /artifacts/{appId} {
+      // Rule for user-specific private data
+      // Each user can read and write only to their own 'bookings' collection
+      match /users/{userId}/bookings/{bookingId} {
+        allow read, create, update, delete: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // You might add rules for public/shared data here later if needed, e.g.:
+      // match /public/data/{collection}/{document} {
+      //   allow read: if true; // Publicly readable data
+      //   allow write: if request.auth != null; // Only authenticated users can write
+      // }
+    }
+  }
+}
