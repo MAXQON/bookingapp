@@ -12,7 +12,6 @@ import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
 // --- Firebase Configuration (Client-Side) ---
-// This config is still needed for your frontend to directly interact with Firebase Auth and Firestore
 const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02';
 const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
@@ -23,13 +22,10 @@ const FIREBASE_CONFIG = {
     appId: "1:909871533345:web:939fa5b6c8203ad4308260",
     measurementId: "G-NF4XH5S2QC"
 };
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas-specific, leave as null for GitHub Pages
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = null;
 
 // --- Backend API Base URL ---
-// IMPORTANT: For local development, this is your backend's URL.
-// When deploying your frontend to GitHub Pages, you'll need to update this
-// to the actual URL of your deployed backend server (e.g., your Render/Heroku URL).
-const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // PASTE YOUR ACTUAL RENDER URL HERE
+const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // IMPORTANT: Replace with your actual Render URL
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
@@ -142,18 +138,16 @@ function BookingApp() {
                 try {
                     setProfileLoading(true);
                     setProfileError(null);
-                    // Use the same path as in your backend and security rules
                     const userProfileDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
                     const userProfileSnap = await getDoc(userProfileDocRef);
 
-                    let displayNameToUse = user.displayName || user.email; // Default from Auth or email
+                    let displayNameToUse = user.displayName || user.email;
                     if (userProfileSnap.exists()) {
                         const profileData = userProfileSnap.data();
-                        displayNameToUse = profileData.displayName || displayNameToUse; // Prefer Firestore name
+                        displayNameToUse = profileData.displayName || displayNameToUse;
                         setUserName(displayNameToUse);
-                        setNewDisplayName(displayNameToUse); // Set for profile modal
+                        setNewDisplayName(displayNameToUse);
                     } else {
-                        // Create a new profile document if it doesn't exist using the Auth display name
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
                             displayName: displayNameToUse,
@@ -168,7 +162,7 @@ function BookingApp() {
                 } catch (profileFetchError) {
                     console.error("Error fetching/creating user profile:", profileFetchError);
                     setProfileError(`Failed to load profile: ${profileFetchError.message}`);
-                    setUserName(user.uid); // Fallback to UID if profile fails
+                    setUserName(user.uid);
                 } finally {
                     setProfileLoading(false);
                 }
@@ -176,7 +170,7 @@ function BookingApp() {
             } else {
                 console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
                 setUserId(null);
-                setUserName(''); // Clear name on logout
+                setUserName('');
                 setNewDisplayName('');
                 setAuthError(null);
                 setProfileError(null);
@@ -267,7 +261,6 @@ function BookingApp() {
         try {
             const userCredential = await createUserWithEmailAndPassword(authInstance, email, password);
             console.log("User signed up successfully!", userCredential.user);
-            // Default display name for Auth user, Firestore profile will pick this up
             await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
 
         } catch (error) {
@@ -298,7 +291,7 @@ function BookingApp() {
         }
         setAuthError(null);
         try {
-            await signInWithPopup(authInstance, new GoogleAuthProvider()); // Use new GoogleAuthProvider()
+            await signInWithPopup(authInstance, new GoogleAuthProvider());
             console.log("User signed in with Google successfully!");
         } catch (error) {
             console.error("Google Sign-in error:", error);
@@ -317,7 +310,7 @@ function BookingApp() {
         try {
             await signOut(authInstance);
             setUserId(null);
-            setUserName(''); // Clear name on logout
+            setUserName('');
             setBookings([]);
             console.log("User logged out.");
             setEditingBookingId(null);
@@ -333,11 +326,10 @@ function BookingApp() {
         }
     }, [authInstance]);
 
-    // --- Handle User Profile Update (now calls standalone backend) ---
+    // --- Handle User Profile Update (calls standalone backend) ---
     const handleUpdateProfile = useCallback(async () => {
-        if (!userId || !authInstance.currentUser || !authInstance) return; // Ensure authInstance is available
+        if (!userId || !authInstance.currentUser) return;
 
-        // Get the current ID token for authentication with your backend
         const idToken = await authInstance.currentUser.getIdToken();
 
         if (!newDisplayName.trim()) {
@@ -352,7 +344,7 @@ function BookingApp() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}` // Send the ID Token for verification
+                    'Authorization': `Bearer ${idToken}`
                 },
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
@@ -363,7 +355,6 @@ function BookingApp() {
                 throw new Error(data.error || 'Failed to update profile via backend.');
             }
 
-            // If backend successful, update local state
             setUserName(newDisplayName.trim());
             setShowProfileModal(false);
             console.log("User profile updated successfully via standalone backend!");
@@ -374,71 +365,73 @@ function BookingApp() {
         } finally {
             setProfileLoading(false);
         }
-    }, [userId, authInstance, newDisplayName]); // Removed dbInstance as it's not directly used here now
+    }, [userId, authInstance, newDisplayName]);
 
 
-    // --- Handle Booking Submission (new/update) ---
+    // --- Handle Booking Submission (now calls standalone backend's confirm-booking endpoint) ---
     const handleBooking = useCallback(() => {
         if (!selectedDate || !selectedTime) {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !dbInstance || isLoadingAuth || profileLoading || authError || profileError) {
+        if (!userId || !authInstance.currentUser || isLoadingBookings || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, isLoadingBookings, profileLoading, authError, profileError });
             return;
         }
 
         if (selectedPaymentMethod === 'online') {
             setShowPaymentSimulationModal(true);
         } else {
-            confirmBooking('pending');
+            // For cash, directly confirm booking via backend
+            confirmBookingViaBackend('pending');
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError, selectedPaymentMethod]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, isLoadingBookings, profileLoading, authError, profileError, selectedPaymentMethod]);
 
 
-    // --- Function to actually confirm and save/update the booking to Firestore ---
-    const confirmBooking = useCallback(async (paymentStatus) => {
+    // --- Function to actually confirm and save/update the booking VIA BACKEND ---
+    const confirmBookingViaBackend = useCallback(async (paymentStatus) => {
         try {
             setError(null);
             setIsLoadingBookings(true);
-            const totalCost = calculateTotal();
+            const idToken = await authInstance.currentUser.getIdToken();
 
-            let currentUserName = userName;
-            if (!currentUserName && authInstance.currentUser) {
-                currentUserName = authInstance.currentUser.displayName || authInstance.currentUser.email || userId;
-            } else if (!currentUserName) {
-                currentUserName = 'Anonymous User';
-            }
-
-            const newBookingData = {
+            const bookingDataToSend = {
                 date: selectedDate,
                 time: selectedTime,
                 duration: duration,
                 equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-                total: totalCost,
-                userId: userId,
-                userName: currentUserName, // Store the user's name with the booking
-                timestamp: serverTimestamp(),
+                total: calculateTotal(),
                 paymentMethod: selectedPaymentMethod,
                 paymentStatus: paymentStatus
             };
 
-            const bookingsCollectionRef = collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`);
+            const payload = {
+                bookingData: bookingDataToSend,
+                userName: userName, // Send current userName for the backend to use
+                editingBookingId: editingBookingId // Send editing ID if in edit mode
+            };
 
-            if (editingBookingId) {
-                const bookingDocRef = doc(bookingsCollectionRef, editingBookingId);
-                await setDoc(bookingDocRef, newBookingData, { merge: true });
-                console.log("Booking successfully UPDATED with ID:", editingBookingId);
-                setCurrentBooking({ ...newBookingData, id: editingBookingId, timestamp: new Date() });
-                setShowConfirmation(true);
-            } else {
-                const docRef = await addDoc(bookingsCollectionRef, newBookingData);
-                console.log("Booking successfully ADDED with ID:", docRef.id);
-                setCurrentBooking({ ...newBookingData, id: docRef.id, timestamp: new Date() });
-                setShowConfirmation(true);
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to confirm booking via backend.');
             }
 
+            // Backend returns success and the actual booking ID (Firestore ID)
+            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: paymentStatus });
+            setShowConfirmation(true);
+
+            // Reset form fields and edit mode after successful operation
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
@@ -447,13 +440,14 @@ function BookingApp() {
             setSelectedPaymentMethod('cash');
 
         } catch (bookingError) {
-            console.error(`Error ${editingBookingId ? 'updating' : 'adding'} booking to Firestore:`, bookingError);
-            setError(`Failed to ${editingBookingId ? 'update' : 'book'} session: ${bookingError.message}`);
+            console.error('Error confirming booking via backend:', bookingError);
+            setError(`Failed to confirm session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
             setShowPaymentSimulationModal(false);
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, dbInstance, selectedPaymentMethod, APP_ID_FOR_FIRESTORE_PATH, editingBookingId, authInstance]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, editingBookingId, authInstance, selectedPaymentMethod]);
+
 
     // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
@@ -1038,7 +1032,7 @@ function BookingApp() {
                                     onClick={() => {
                                         setShowProfileModal(false);
                                         setProfileError(null);
-                                        setNewDisplayName(userName); // Reset newDisplayName to current userName if user cancels
+                                        setNewDisplayName(userName);
                                     }}
                                     className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
                                 >
@@ -1062,7 +1056,7 @@ function BookingApp() {
                             </p>
                             <div className="flex justify-center gap-4">
                                 <button
-                                    onClick={() => confirmBooking('paid')}
+                                    onClick={() => confirmBookingViaBackend('paid')} // Calls the backend function
                                     className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
                                 >
                                     Confirm Payment (Simulated)
