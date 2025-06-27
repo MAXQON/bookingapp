@@ -349,7 +349,18 @@ function BookingApp() {
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
 
-            const data = await response.json();
+            // IMPORTANT DEBUGGING STEP: Log raw response text before attempting JSON parsing
+            const responseText = await response.text();
+            console.log('Raw response text from update-profile:', responseText);
+
+            let data;
+            try {
+                data = JSON.parse(responseText); // Attempt to parse the text as JSON
+            } catch (jsonParseError) {
+                console.error('JSON Parse Error for update-profile:', jsonParseError);
+                throw new Error(`JSON.parse error from backend: ${jsonParseError.message}. Raw response: ${responseText.substring(0, 200)}...`);
+            }
+            
 
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to update profile via backend.');
@@ -421,7 +432,18 @@ function BookingApp() {
                 body: JSON.stringify(payload)
             });
 
-            const data = await response.json();
+            // IMPORTANT DEBUGGING STEP: Log raw response text before attempting JSON parsing
+            const responseText = await response.text();
+            console.log('Raw response text from confirm-booking:', responseText);
+
+            let data;
+            try {
+                data = JSON.parse(responseText); // Attempt to parse the text as JSON
+            } catch (jsonParseError) {
+                console.error('JSON Parse Error for confirm-booking:', jsonParseError);
+                throw new Error(`JSON.parse error from backend: ${jsonParseError.message}. Raw response: ${responseText.substring(0, 200)}...`);
+            }
+            
 
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to confirm booking via backend.');
