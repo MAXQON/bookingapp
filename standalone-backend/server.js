@@ -53,28 +53,39 @@ const app = express();
 const port = process.env.PORT || 5000; // Use Render's PORT or default to 5000 for local development
 
 // --- Middleware ---
-// Configure CORS to only allow your frontend's domain in production.
-// For local development, 'http://localhost:5173' (Vite default) would be used.
-// For GitHub Pages, it would be 'https://maxqon.github.io'.
-// You can make this conditional based on process.env.NODE_ENV
+// Configure CORS more robustly.
+// Ensure your Render backend URL is in this list for self-testing if needed,
+// and your GitHub Pages URL (root domain) must be here.
 const allowedOrigins = [
-    'http://localhost:5173', // Your local frontend dev server
-    'http://localhost:5000', // Your local backend itself
-    'https://maxqon.github.io' // Your deployed GitHub Pages frontend
-    // Add other frontend domains if applicable (e.g., if you map a custom domain to GitHub Pages)
-];
+    'http://localhost:5173',          // Your local frontend dev server
+    'http://localhost:5000',          // Your local backend itself
+    'https://maxqon.github.io',       // Your deployed GitHub Pages frontend (root domain)
+    // Add your Render backend's actual public URL here as well
+    // e.g., 'https://your-backend-name.onrender.com'
+    // This is important if you ever have service-to-service calls or testing
+    process.env.RENDER_EXTERNAL_URL // Render provides its own URL here
+].filter(Boolean); // Filter out any undefined/null values from process.env.RENDER_EXTERNAL_URL if not present
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+        console.log('CORS Request Origin:', origin); // Log the incoming origin for debugging
+        // Allow requests with no origin (like same-origin requests or mobile apps/curl requests)
+        if (!origin) {
+            console.log('CORS: Origin is null/undefined, allowing.');
+            return callback(null, true);
+        }
+        
+        // Check if the origin is in our allowed list
+        if (allowedOrigins.includes(origin)) {
+            console.log('CORS: Origin is allowed:', origin);
+            return callback(null, true);
+        } else {
+            const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`;
+            console.error('CORS: Blocked origin.', msg);
             return callback(new Error(msg), false);
         }
-        return callback(null, true);
     },
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Allowed HTTP methods
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE'], // Explicitly list allowed HTTP methods
     credentials: true, // Allow cookies/auth headers to be sent
     optionsSuccessStatus: 204 // For pre-flight requests
 }));
