@@ -1,33 +1,40 @@
 // src/App.jsx
 
 // Import necessary React hooks
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react'; // Added useRef
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 
 // Import Firebase and Firestore modules
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
          createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
-         GoogleAuthProvider, signInWithPopup } from 'firebase/auth'; 
-import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp, 
-         doc, deleteDoc, setDoc } from 'firebase/firestore'; // Added doc, deleteDoc, setDoc
+         GoogleAuthProvider, signInWithPopup, updateProfile } from 'firebase/auth';
+import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
+         doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration ---
-const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02'; 
+// --- Firebase Configuration (Client-Side) ---
+// This config is still needed for your frontend to directly interact with Firebase Auth and Firestore
+const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02';
 const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
     authDomain: "booking-app-1af02.firebaseapp.com",
     projectId: "booking-app-1af02",
     storageBucket: "booking-app-1af02.firebasestorage.app",
     messagingSenderId: "909871533345",
-    appId: "1:909871533345:web:939fa5b6c8203ad4308260", 
+    appId: "1:909871533345:web:939fa5b6c8203ad4308260",
     measurementId: "G-NF4XH5S2QC"
 };
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; 
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas-specific, leave as null for GitHub Pages
+
+// --- Backend API Base URL ---
+// IMPORTANT: For local development, this is your backend's URL.
+// When deploying your frontend to GitHub Pages, you'll need to update this
+// to the actual URL of your deployed backend server (e.g., your Render/Heroku URL).
+const BACKEND_API_BASE_URL = 'http://localhost:5000'; // Match the PORT in your .env for local testing
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
     { id: 1, name: 'Pioneer CDJ-3000', type: 'CDJ Player', icon: '🎵', category: 'player' },
-    { id: 2, name: 'Technics SL-1200', type: 'Turntable', icon: '💿', category: 'player' }, 
+    { id: 2, name: 'Technics SL-1200', type: 'Turntable', icon: '💿', category: 'player' },
     { id: 3, name: 'DJM A9', type: 'DJ Mixer', icon: '🎛️', category: 'mixer' },
     { id: 4, name: 'DJM V10', type: 'DJ Mixer', icon: '🎚️', category: 'mixer' }
 ];
@@ -42,11 +49,11 @@ const formatTime = (timeString) => {
     const hourNum = parseInt(hour);
     const ampm = hourNum >= 12 ? 'PM' : 'AM';
     const displayHour = hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum;
-    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`; 
+    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`;
 };
 const getEndTime = (startTime, durationHours) => {
     if (!startTime || isNaN(durationHours)) return '';
-    const [hour, minute] = startTime.split(':'); 
+    const [hour, minute] = startTime.split(':');
     const start = new Date();
     start.setHours(parseInt(hour), parseInt(minute), 0, 0);
     start.setHours(start.getHours() + durationHours);
@@ -63,29 +70,36 @@ function BookingApp() {
     const [bookings, setBookings] = useState([]);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [currentBooking, setCurrentBooking] = useState(null);
-    const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash'); 
+    const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash');
     const [showPaymentSimulationModal, setShowPaymentSimulationModal] = useState(false);
 
     // Edit/Cancel specific state
-    const [editingBookingId, setEditingBookingId] = useState(null); // ID of booking being edited
+    const [editingBookingId, setEditingBookingId] = useState(null);
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
-    const [bookingToDelete, setBookingToDelete] = useState(null); // Store the booking object to delete
+    const [bookingToDelete, setBookingToDelete] = useState(null);
 
     // Firebase state
     const [userId, setUserId] = useState(null);
+    const [userName, setUserName] = useState(''); // Store user's display name
     const [firebaseAppInstance, setFirebaseAppInstance] = useState(null);
     const [dbInstance, setDbInstance] = useState(null);
     const [authInstance, setAuthInstance] = useState(null);
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const [isLoadingBookings, setIsLoadingBookings] = useState(false);
     const [error, setError] = useState(null);
-    const [authError, setAuthError] = useState(null); 
+    const [authError, setAuthError] = useState(null);
 
     // Authentication UI State
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [isLoginMode, setIsLoginMode] = useState(true); 
+    const [isLoginMode, setIsLoginMode] = useState(true);
+
+    // Profile Management State
+    const [showProfileModal, setShowProfileModal] = useState(false);
+    const [newDisplayName, setNewDisplayName] = useState('');
+    const [profileLoading, setProfileLoading] = useState(false);
+    const [profileError, setProfileError] = useState(null);
 
     // Ref for scrolling to the booking form
     const bookingFormRef = useRef(null);
@@ -97,7 +111,7 @@ function BookingApp() {
             const app = initializeApp(FIREBASE_CONFIG);
             const db = getFirestore(app);
             const auth = getAuth(app);
-            
+
             setFirebaseAppInstance(app);
             setDbInstance(db);
             setAuthInstance(auth);
@@ -108,12 +122,12 @@ function BookingApp() {
             setError(`Firebase Initialization Error: ${e.message}`);
             setIsLoadingAuth(false);
         }
-    }, []); 
+    }, []);
 
-    // --- EFFECT 2: Handle Firebase Authentication State ---
+    // --- EFFECT 2: Handle Firebase Authentication State & User Profile ---
     useEffect(() => {
-        if (!authInstance) { 
-            console.log("Auth instance not ready, skipping auth state listener.");
+        if (!authInstance || !dbInstance) {
+            console.log("Auth or DB instance not ready, skipping auth state listener.");
             return;
         }
 
@@ -121,29 +135,67 @@ function BookingApp() {
         const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
             if (user) {
                 setUserId(user.uid);
-                setAuthError(null); 
-                console.log("Auth state changed: User is signed in. UID:", user.uid);
-                setShowAuthModal(false); 
+                setAuthError(null);
+                setShowAuthModal(false);
+
+                // --- Fetch/Create User Profile from Firestore ---
+                try {
+                    setProfileLoading(true);
+                    setProfileError(null);
+                    // Use the same path as in your backend and security rules
+                    const userProfileDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
+                    const userProfileSnap = await getDoc(userProfileDocRef);
+
+                    let displayNameToUse = user.displayName || user.email; // Default from Auth or email
+                    if (userProfileSnap.exists()) {
+                        const profileData = userProfileSnap.data();
+                        displayNameToUse = profileData.displayName || displayNameToUse; // Prefer Firestore name
+                        setUserName(displayNameToUse);
+                        setNewDisplayName(displayNameToUse); // Set for profile modal
+                    } else {
+                        // Create a new profile document if it doesn't exist using the Auth display name
+                        await setDoc(userProfileDocRef, {
+                            userId: user.uid,
+                            displayName: displayNameToUse,
+                            createdAt: serverTimestamp()
+                        }, { merge: true });
+                        setUserName(displayNameToUse);
+                        setNewDisplayName(displayNameToUse);
+                        console.log("Created new user profile in Firestore.");
+                    }
+                    console.log("Auth state changed: User is signed in. UID:", user.uid, "Name:", displayNameToUse);
+
+                } catch (profileFetchError) {
+                    console.error("Error fetching/creating user profile:", profileFetchError);
+                    setProfileError(`Failed to load profile: ${profileFetchError.message}`);
+                    setUserName(user.uid); // Fallback to UID if profile fails
+                } finally {
+                    setProfileLoading(false);
+                }
+
             } else {
                 console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
-                setUserId(null); 
-                setAuthError(null); 
+                setUserId(null);
+                setUserName(''); // Clear name on logout
+                setNewDisplayName('');
+                setAuthError(null);
+                setProfileError(null);
             }
-            setIsLoadingAuth(false); 
+            setIsLoadingAuth(false);
         });
 
         return () => {
             console.log("Cleaning up auth state listener.");
             unsubscribe();
         };
-    }, [authInstance]); 
+    }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
 
     // --- EFFECT 3: Firestore Bookings Real-time Listener ---
     useEffect(() => {
-        if (!dbInstance || userId === null || isLoadingAuth || authError) { 
+        if (!dbInstance || userId === null || isLoadingAuth || authError) {
             console.log("Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
-            setBookings([]); 
-            setIsLoadingBookings(false); 
+            setBookings([]);
+            setIsLoadingBookings(false);
             return;
         }
 
@@ -176,7 +228,7 @@ function BookingApp() {
             console.log("Cleaning up Firestore listener.");
             unsubscribe();
         };
-    }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]); 
+    }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
 
     // Memoized values
     const today = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -203,7 +255,7 @@ function BookingApp() {
                 return [...prev, equipment];
             }
         });
-    }, []); 
+    }, []);
 
     // --- Authentication Handlers ---
     const handleSignUp = useCallback(async () => {
@@ -213,11 +265,14 @@ function BookingApp() {
         }
         setAuthError(null);
         try {
-            await createUserWithEmailAndPassword(authInstance, email, password);
-            console.log("User signed up successfully!");
+            const userCredential = await createUserWithEmailAndPassword(authInstance, email, password);
+            console.log("User signed up successfully!", userCredential.user);
+            // Default display name for Auth user, Firestore profile will pick this up
+            await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
+
         } catch (error) {
             console.error("Sign-up error:", error);
-            setAuthError(`Sign-up failed: ${error.message}`); 
+            setAuthError(`Sign-up failed: ${error.message}`);
         }
     }, [authInstance, email, password]);
 
@@ -243,8 +298,7 @@ function BookingApp() {
         }
         setAuthError(null);
         try {
-            const provider = new GoogleAuthProvider();
-            await signInWithPopup(authInstance, provider);
+            await signInWithPopup(authInstance, new GoogleAuthProvider()); // Use new GoogleAuthProvider()
             console.log("User signed in with Google successfully!");
         } catch (error) {
             console.error("Google Sign-in error:", error);
@@ -262,10 +316,10 @@ function BookingApp() {
         if (!authInstance) return;
         try {
             await signOut(authInstance);
-            setUserId(null); 
-            setBookings([]); 
+            setUserId(null);
+            setUserName(''); // Clear name on logout
+            setBookings([]);
             console.log("User logged out.");
-            // Also reset edit mode when logging out
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
@@ -279,25 +333,68 @@ function BookingApp() {
         }
     }, [authInstance]);
 
+    // --- Handle User Profile Update (now calls standalone backend) ---
+    const handleUpdateProfile = useCallback(async () => {
+        if (!userId || !authInstance.currentUser || !authInstance) return; // Ensure authInstance is available
+
+        // Get the current ID token for authentication with your backend
+        const idToken = await authInstance.currentUser.getIdToken();
+
+        if (!newDisplayName.trim()) {
+            setProfileError("Display name cannot be empty.");
+            return;
+        }
+
+        setProfileLoading(true);
+        setProfileError(null);
+        try {
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/update-profile`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}` // Send the ID Token for verification
+                },
+                body: JSON.stringify({ displayName: newDisplayName.trim() })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to update profile via backend.');
+            }
+
+            // If backend successful, update local state
+            setUserName(newDisplayName.trim());
+            setShowProfileModal(false);
+            console.log("User profile updated successfully via standalone backend!");
+
+        } catch (error) {
+            console.error("Error updating profile via backend:", error);
+            setProfileError(`Failed to update profile: ${error.message}`);
+        } finally {
+            setProfileLoading(false);
+        }
+    }, [userId, authInstance, newDisplayName]); // Removed dbInstance as it's not directly used here now
+
+
     // --- Handle Booking Submission (new/update) ---
     const handleBooking = useCallback(() => {
         if (!selectedDate || !selectedTime) {
-            alert('Please select both date and time to proceed with booking.');
+            setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !dbInstance || authError) { 
+        if (!userId || !dbInstance || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when userId, dbInstance, or authError not ready.", { userId, dbInstance, authError });
+            console.error("Booking attempted when app state not ready.", { userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError });
             return;
         }
 
         if (selectedPaymentMethod === 'online') {
             setShowPaymentSimulationModal(true);
         } else {
-            // For cash, default payment status to 'pending'
-            confirmBooking('pending'); 
+            confirmBooking('pending');
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, authError, selectedPaymentMethod]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError, selectedPaymentMethod]);
 
 
     // --- Function to actually confirm and save/update the booking to Firestore ---
@@ -306,52 +403,57 @@ function BookingApp() {
             setError(null);
             setIsLoadingBookings(true);
             const totalCost = calculateTotal();
-            
+
+            let currentUserName = userName;
+            if (!currentUserName && authInstance.currentUser) {
+                currentUserName = authInstance.currentUser.displayName || authInstance.currentUser.email || userId;
+            } else if (!currentUserName) {
+                currentUserName = 'Anonymous User';
+            }
+
             const newBookingData = {
                 date: selectedDate,
                 time: selectedTime,
                 duration: duration,
                 equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
                 total: totalCost,
-                userId: userId, 
+                userId: userId,
+                userName: currentUserName, // Store the user's name with the booking
                 timestamp: serverTimestamp(),
-                paymentMethod: selectedPaymentMethod, 
-                paymentStatus: paymentStatus 
+                paymentMethod: selectedPaymentMethod,
+                paymentStatus: paymentStatus
             };
 
             const bookingsCollectionRef = collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`);
 
             if (editingBookingId) {
-                // Update existing document
                 const bookingDocRef = doc(bookingsCollectionRef, editingBookingId);
-                await setDoc(bookingDocRef, newBookingData, { merge: true }); // Use setDoc with merge to update fields
+                await setDoc(bookingDocRef, newBookingData, { merge: true });
                 console.log("Booking successfully UPDATED with ID:", editingBookingId);
                 setCurrentBooking({ ...newBookingData, id: editingBookingId, timestamp: new Date() });
                 setShowConfirmation(true);
             } else {
-                // Add new document
                 const docRef = await addDoc(bookingsCollectionRef, newBookingData);
                 console.log("Booking successfully ADDED with ID:", docRef.id);
                 setCurrentBooking({ ...newBookingData, id: docRef.id, timestamp: new Date() });
                 setShowConfirmation(true);
             }
-            
-            // Reset form fields and edit mode after successful operation
+
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
             setDuration(2);
             setSelectedEquipment([]);
-            setSelectedPaymentMethod('cash'); 
+            setSelectedPaymentMethod('cash');
 
         } catch (bookingError) {
             console.error(`Error ${editingBookingId ? 'updating' : 'adding'} booking to Firestore:`, bookingError);
             setError(`Failed to ${editingBookingId ? 'update' : 'book'} session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
-            setShowPaymentSimulationModal(false); 
+            setShowPaymentSimulationModal(false);
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, selectedPaymentMethod, APP_ID_FOR_FIRESTORE_PATH, editingBookingId]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, dbInstance, selectedPaymentMethod, APP_ID_FOR_FIRESTORE_PATH, editingBookingId, authInstance]);
 
     // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
@@ -359,11 +461,10 @@ function BookingApp() {
         setSelectedDate(booking.date);
         setSelectedTime(booking.time);
         setDuration(booking.duration);
-        setSelectedEquipment(booking.equipment || []); // Ensure equipment is an array
+        setSelectedEquipment(booking.equipment || []);
         setSelectedPaymentMethod(booking.paymentMethod || 'cash');
-        setError(null); // Clear any previous errors
+        setError(null);
 
-        // Scroll to the top of the form
         if (bookingFormRef.current) {
             bookingFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -385,7 +486,6 @@ function BookingApp() {
             const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
             await deleteDoc(bookingDocRef);
             console.log("Booking successfully deleted:", bookingToDelete.id);
-            // onSnapshot listener will automatically update the state, no need to manually filter
         } catch (deleteError) {
             console.error("Error deleting booking:", deleteError);
             setError(`Failed to delete booking: ${deleteError.message}`);
@@ -398,37 +498,49 @@ function BookingApp() {
 
 
     // Display loading state for authentication or if Firebase is not initialized, or if auth failed
-    if (isLoadingAuth || !firebaseAppInstance || authError) { 
+    if (isLoadingAuth || !firebaseAppInstance || authError || profileLoading) {
         return (
             <div className="bg-gray-900 min-h-screen flex items-center justify-center text-orange-200 text-2xl p-4 text-center">
-                {authError ? `Authentication Error: ${authError}` : "Authenticating Firebase..."}
+                {authError ? `Authentication Error: ${authError}` : profileLoading ? "Loading profile..." : "Authenticating Firebase..."}
                 <br/>
-                {error && <span className="text-red-300 text-base">{error}</span>} 
+                {error && <span className="text-red-300 text-base">{error}</span>}
+                {profileError && <span className="text-red-300 text-base">{profileError}</span>}
             </div>
         );
     }
 
     // Main App Render
     return (
-        <div className="bg-gray-900 min-h-screen p-4"> {/* Dark background */}
+        <div className="bg-gray-900 min-h-screen p-4">
             <div className="max-w-4xl mx-auto">
                 {/* Header Section */}
                 <div className="text-center mb-8">
-                    <h1 className="text-4xl font-bold text-orange-400 mb-2"> {/* Orange accent */}
+                    <h1 className="text-4xl font-bold text-orange-400 mb-2">
                         🎧 DJ Studio Booking
                     </h1>
-                    <p className="text-gray-300 text-lg"> {/* Lighter text for dark mode */}
+                    <p className="text-gray-300 text-lg">
                         Book your professional DJ room with premium equipment
                     </p>
-                    <div className="mt-4 flex justify-center gap-4">
+                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
                         {userId ? (
                             <>
                                 <p className="text-gray-400 text-sm">
-                                    Logged In: <span className="font-mono bg-gray-700 p-1 rounded-md text-xs text-orange-200">{userId.substring(0, 8)}...</span> {/* Orange accent for ID */}
+                                    Logged In: <span className="font-semibold text-orange-200">
+                                        {userName || (userId ? userId.substring(0, 8) + '...' : 'Loading...')}
+                                    </span>
                                 </p>
                                 <button
-                                    onClick={handleLogout}
+                                    onClick={() => {
+                                        setNewDisplayName(userName);
+                                        setShowProfileModal(true);
+                                    }}
                                     className="px-4 py-2 bg-orange-600 text-white rounded-xl text-sm hover:bg-orange-700 transition duration-200 shadow-lg"
+                                >
+                                    Edit Profile
+                                </button>
+                                <button
+                                    onClick={handleLogout}
+                                    className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition duration-200 shadow-lg"
                                 >
                                     Logout
                                 </button>
@@ -445,22 +557,22 @@ function BookingApp() {
                 </div>
 
                 {/* General Error Display */}
-                {error && !authError && ( 
-                    <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4" role="alert"> {/* Darker error for dark mode */}
+                {(error || profileError) && !authError && (
+                    <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4" role="alert">
                         <strong className="font-bold">Error!</strong>
-                        <span className="block sm:inline"> {error}</span>
+                        <span className="block sm:inline"> {error || profileError}</span>
                     </div>
                 )}
 
                 {/* Main Booking Card: Date, Time & Summary */}
-                <div ref={bookingFormRef} className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700"> {/* Dark card background */}
+                <div ref={bookingFormRef} className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
                     <div className="grid md:grid-cols-2 gap-8">
                         {/* Date & Time Selection Inputs */}
                         <div className="space-y-6">
-                            <h2 className="text-2xl font-semibold text-orange-300 mb-4"> {/* Orange accent */}
+                            <h2 className="text-2xl font-semibold text-orange-300 mb-4">
                                 📅 Schedule Your Session
                             </h2>
-                            
+
                             <div>
                                 <label htmlFor="select-date" className="block text-sm font-medium text-gray-300 mb-2">
                                     Select Date
@@ -515,12 +627,12 @@ function BookingApp() {
                         </div>
 
                         {/* Booking Summary Display */}
-                        <div className="bg-gray-700 rounded-xl p-6 border border-gray-600"> {/* Dark summary background */}
-                            <h3 className="text-xl font-semibold text-orange-300 mb-4"> {/* Orange accent */}
+                        <div className="bg-gray-700 rounded-xl p-6 border border-gray-600">
+                            <h3 className="text-xl font-semibold text-orange-300 mb-4">
                                 💰 Booking Summary
                             </h3>
-                            
-                            <div className="space-y-3 text-gray-300"> {/* Lighter text */}
+
+                            <div className="space-y-3 text-gray-300">
                                 <div className="flex justify-between text-sm">
                                     <span>Room Rate (per hour)</span>
                                     <span>{formatIDR(ROOM_RATE_PER_HOUR)}</span>
@@ -531,17 +643,17 @@ function BookingApp() {
                                 </div>
                                 <div className="flex justify-between text-sm">
                                     <span>Equipment</span>
-                                    <span className="text-green-400">Included</span> {/* Green for 'Included' */}
+                                    <span className="text-green-400">Included</span>
                                 </div>
-                                <hr className="my-3 border-gray-600" /> {/* Darker divider */}
+                                <hr className="my-3 border-gray-600" />
                                 <div className="flex justify-between font-semibold text-lg">
                                     <span>Total</span>
-                                    <span className="text-orange-400">{formatIDR(calculateTotal())}</span> {/* Orange for total */}
+                                    <span className="text-orange-400">{formatIDR(calculateTotal())}</span>
                                 </div>
                             </div>
 
                             {selectedDate && selectedTime && (
-                                <div className="mt-6 p-4 bg-gray-600 rounded-lg text-gray-200"> {/* Darker details background */}
+                                <div className="mt-6 p-4 bg-gray-600 rounded-lg text-gray-200">
                                     <p className="text-sm text-gray-300">Session Details:</p>
                                     <p className="font-medium">{formatDate(selectedDate)}</p>
                                     <p className="font-medium">
@@ -554,12 +666,12 @@ function BookingApp() {
                 </div>
 
                 {/* Equipment Selection Section */}
-                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700"> {/* Dark card background */}
-                    <h2 className="text-2xl font-semibold text-orange-300 mb-6"> {/* Orange accent */}
+                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
+                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">
                         🎛️ Select Your Preferred Equipment
                     </h2>
                     <p className="text-gray-300 mb-6">All equipment is included in the room price. Please select what you'd like to use:</p>
-                    
+
                     <div className="grid sm:grid-cols-2 gap-6">
                         {/* Players Equipment List */}
                         <div>
@@ -572,9 +684,9 @@ function BookingApp() {
                                             key={equipment.id}
                                             onClick={() => toggleEquipment(equipment)}
                                             className={`p-4 rounded-xl cursor-pointer border-2 transition-all duration-200 hover:translate-y-[-2px] ${
-                                                isSelected 
-                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white' // Orange selected
-                                                    : 'border-gray-700 bg-gray-700 hover:border-orange-500 hover:shadow-sm text-gray-200' // Dark unselected
+                                                isSelected
+                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white'
+                                                    : 'border-gray-700 bg-gray-700 hover:border-orange-500 hover:shadow-sm text-gray-200'
                                             }`}
                                         >
                                             <div className="flex items-center space-x-3">
@@ -608,8 +720,8 @@ function BookingApp() {
                                             key={equipment.id}
                                             onClick={() => toggleEquipment(equipment)}
                                             className={`p-4 rounded-xl cursor-pointer border-2 transition-all duration-200 hover:translate-y-[-2px] ${
-                                                isSelected 
-                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white' 
+                                                isSelected
+                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white'
                                                     : 'border-gray-700 bg-gray-700 hover:border-orange-500 hover:shadow-sm text-gray-200'
                                             }`}
                                         >
@@ -635,7 +747,7 @@ function BookingApp() {
                     </div>
 
                     {selectedEquipment.length > 0 && (
-                        <div className="mt-6 p-4 bg-green-900 rounded-lg text-green-300 border border-green-700"> {/* Dark green for selected equipment */}
+                        <div className="mt-6 p-4 bg-green-900 rounded-lg text-green-300 border border-green-700">
                             <h4 className="font-semibold mb-2">Selected Equipment:</h4>
                             <div className="flex flex-wrap gap-2">
                                 {selectedEquipment.map(eq => (
@@ -649,8 +761,8 @@ function BookingApp() {
                 </div>
 
                 {/* Payment Method Selection */}
-                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700"> {/* Dark card background */}
-                    <h2 className="text-2xl font-semibold text-orange-300 mb-6"> {/* Orange accent */}
+                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
+                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">
                         💳 Select Payment Method
                     </h2>
                     <div className="flex flex-col sm:flex-row gap-4">
@@ -683,15 +795,15 @@ function BookingApp() {
                 <div className="text-center">
                     <button
                         onClick={handleBooking}
-                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId} 
+                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId}
                         className={`px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
                             selectedDate && selectedTime && !isLoadingBookings && userId
                                 ? 'bg-gradient-to-r from-orange-600 to-orange-800 text-white hover:from-orange-700 hover:to-orange-900 shadow-lg hover:shadow-xl transform hover:scale-105'
                                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
                         }`}
                     >
-                        {isLoadingBookings 
-                            ? (editingBookingId ? 'Updating...' : 'Booking...') 
+                        {isLoadingBookings
+                            ? (editingBookingId ? 'Updating...' : 'Booking...')
                             : (editingBookingId ? `📝 Update Booking - ${formatIDR(calculateTotal())}` : `🎵 Book DJ Studio - ${formatIDR(calculateTotal())}`)}
                     </button>
                     {editingBookingId && (
@@ -713,7 +825,7 @@ function BookingApp() {
                 </div>
 
                 {/* Recent Bookings Section */}
-                {userId && (isLoadingBookings && bookings.length === 0 && !error) ? ( // Add !error to condition
+                {userId && (isLoadingBookings && bookings.length === 0 && !error) ? (
                     <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
                         Loading bookings...
                     </div>
@@ -723,7 +835,7 @@ function BookingApp() {
                             📋 Recent Bookings
                         </h2>
                         <div className="space-y-4">
-                            {bookings.map(booking => ( // Changed slice to map all bookings
+                            {bookings.map(booking => (
                                 <div key={booking.id} className="bg-gray-700 rounded-lg p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-600">
                                     <div className="flex-grow mb-4 sm:mb-0">
                                         <p className="font-medium text-gray-100">Booking ID: <span className="font-mono text-xs text-gray-400">{booking.id}</span></p>
@@ -734,7 +846,7 @@ function BookingApp() {
                                             Equipment: {booking.equipment && booking.equipment.length > 0 ? booking.equipment.map(e => e.name).join(', ') : 'None selected'}
                                         </p>
                                         <p className="text-xs text-gray-400 mt-1">
-                                            Payment: {booking.paymentMethod === 'online' ? 'Online' : 'Cash'} 
+                                            Payment: {booking.paymentMethod === 'online' ? 'Online' : 'Cash'}
                                             <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
                                                 booking.paymentStatus === 'paid' ? 'bg-green-700 text-green-200' : 'bg-yellow-700 text-yellow-200'
                                             }`}>
@@ -742,7 +854,13 @@ function BookingApp() {
                                             </span>
                                         </p>
                                     </div>
-                                    <div className="flex flex-col sm:flex-row gap-2">
+                                    <div className="text-right">
+                                        <p className="font-bold text-orange-400">{formatIDR(booking.total)}</p>
+                                        <p className="text-xs text-gray-400">
+                                            Booked by: <span className="font-semibold text-orange-200">{booking.userName || (booking.userId ? booking.userId.substring(0, 8) + '...' : 'N/A')}</span>
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-2 mt-2 sm:mt-0 sm:ml-4">
                                         {/* Only show edit/cancel if current user is the booking owner */}
                                         {userId === booking.userId && (
                                             <>
@@ -782,14 +900,14 @@ function BookingApp() {
 
                 {/* Confirmation Modal */}
                 {showConfirmation && currentBooking && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"> {/* Darker overlay */}
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700"> {/* Dark modal */}
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
                             <div className="text-center">
                                 <div className="text-6xl mb-4 pulse-animation">🎉</div>
                                 <h2 className="text-2xl font-bold text-orange-400 mb-4">
                                     {editingBookingId ? 'Booking Updated!' : 'Booking Confirmed!'}
                                 </h2>
-                                <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200"> {/* Dark details background */}
+                                <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
                                     <p><strong>Date:</strong> {formatDate(currentBooking.date)}</p>
                                     <p><strong>Time:</strong> {formatTime(currentBooking.time)}</p>
                                     <p><strong>Duration:</strong> {currentBooking.duration} hours</p>
@@ -797,11 +915,12 @@ function BookingApp() {
                                     <p><strong>Total:</strong> {formatIDR(currentBooking.total)}</p>
                                     <p><strong>Booking ID:</strong> <span className="font-mono text-xs text-gray-400">#{currentBooking.id}</span></p>
                                     <p className="mt-2"><strong>Payment Method:</strong> {currentBooking.paymentMethod === 'online' ? 'Online' : 'Cash on Arrival'}</p>
-                                    <p><strong>Payment Status:</strong> 
+                                    <p><strong>Payment Status:</strong>
                                         <span className={`ml-1 font-semibold ${currentBooking.paymentStatus === 'paid' ? 'text-green-400' : 'text-yellow-400'}`}>
                                             {currentBooking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
                                         </span>
                                     </p>
+                                    <p className="mt-2"><strong>Booked By:</strong> <span className="font-semibold text-orange-200">{currentBooking.userName || 'N/A'}</span></p>
                                 </div>
                                 <button
                                     onClick={() => setShowConfirmation(false)}
@@ -816,9 +935,9 @@ function BookingApp() {
 
                 {/* Auth Modal */}
                 {showAuthModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"> {/* Darker overlay */}
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700"> {/* Dark modal */}
-                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center"> {/* Orange accent */}
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
+                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
                                 {isLoginMode ? 'Sign In' : 'Sign Up'}
                             </h2>
                             {authError && (
@@ -882,10 +1001,59 @@ function BookingApp() {
                     </div>
                 )}
 
+                {/* Profile Management Modal */}
+                {showProfileModal && userId && (
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
+                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
+                                Manage Profile
+                            </h2>
+                            {profileError && (
+                                <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4 text-sm" role="alert">
+                                    {profileError}
+                                </div>
+                            )}
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-2">Display Name</label>
+                                    <input
+                                        type="text"
+                                        id="displayName"
+                                        value={newDisplayName}
+                                        onChange={(e) => setNewDisplayName(e.target.value)}
+                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
+                                        placeholder="Your Name"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-6 space-y-4">
+                                <button
+                                    onClick={handleUpdateProfile}
+                                    disabled={profileLoading}
+                                    className="w-full px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition duration-200"
+                                >
+                                    {profileLoading ? 'Updating...' : 'Update Profile'}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowProfileModal(false);
+                                        setProfileError(null);
+                                        setNewDisplayName(userName); // Reset newDisplayName to current userName if user cancels
+                                    }}
+                                    className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+
                 {/* Payment Simulation Modal */}
                 {showPaymentSimulationModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"> {/* Darker overlay */}
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700"> {/* Dark modal */}
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700">
                             <h2 className="text-2xl font-bold text-orange-400 mb-4">
                                 Simulate Online Payment
                             </h2>
@@ -912,8 +1080,8 @@ function BookingApp() {
 
                 {/* Delete Confirmation Modal */}
                 {showDeleteConfirmation && bookingToDelete && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"> {/* Darker overlay */}
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700"> {/* Dark modal */}
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700">
                             <h2 className="text-2xl font-bold text-red-400 mb-4">
                                 Confirm Deletion
                             </h2>

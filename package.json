@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://maxqon.github.io/bookingapp",
+  "homepage": "https://maxqon.github.io/bookingapp/",
   "scripts": {
     "dev": "vite",
     "build-debug": "vite build",
