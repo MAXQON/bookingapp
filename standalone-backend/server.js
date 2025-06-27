@@ -9,7 +9,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 
 // --- Firebase Admin SDK Initialization ---
-// For Render deployment, we will now use a Base64 encoded service account key.
+// We are now expecting the Base64 encoded JSON string directly.
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID;
 
@@ -23,19 +23,22 @@ if (!encodedServiceAccountJson) {
 
 let serviceAccount;
 try {
-    // Decode the Base64 string
+    // Decode the Base64 string back to its original JSON string format
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
-    // Parse the JSON string
+    // Parse the JSON string into an object
     serviceAccount = JSON.parse(decodedServiceAccountJson);
     console.log('Service account JSON decoded and parsed successfully.');
 
+    // Initialize Firebase Admin SDK with the parsed service account object
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: `https://${projectId}.firebaseio.com` // Optional: specify if using Realtime Database
     });
     console.log('Firebase Admin SDK initialized successfully.');
 } catch (error) {
-    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 format or value.', error);
+    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value or format after decoding/parsing.', error);
+    // Provide details if possible, but be cautious about sensitive info in logs
+    console.error('Original error:', error.message);
     process.exit(1); // Exit if initialization fails
 }
 
