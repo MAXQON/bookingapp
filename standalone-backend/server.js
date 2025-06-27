@@ -45,7 +45,7 @@ try {
 // Get references to Firestore and Auth services
 const db = admin.firestore();
 const auth = admin.auth();
-
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64);
 // Define a constant for your APP_ID_FOR_FIRESTORE_PATH
 // This must match the APP_ID_FOR_FIRESTORE_PATH used in your frontend App.jsx.
 const APP_ID_FOR_FIRESTORE_PATH = process.env.APP_ID_FOR_FIRESTORE_PATH;
