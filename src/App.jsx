@@ -29,7 +29,7 @@ const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas-specific, leave as null f
 // IMPORTANT: For local development, this is your backend's URL.
 // When deploying your frontend to GitHub Pages, you'll need to update this
 // to the actual URL of your deployed backend server (e.g., your Render/Heroku URL).
-const BACKEND_API_BASE_URL = 'http://localhost:5000'; // Match the PORT in your .env for local testing
+const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // PASTE YOUR ACTUAL RENDER URL HERE
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
