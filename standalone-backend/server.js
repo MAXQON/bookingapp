@@ -56,18 +56,17 @@ if (!googleAuthKeyFilePath) {
     process.exit(1); // Exit if critical path for Google Calendar is missing
 }
 
-
 let serviceAccount; // This will hold the parsed service account JSON object for Firebase Admin
+let firebaseAdminApp; // Hold the Firebase Admin App instance
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     serviceAccount = JSON.parse(decodedServiceAccountJson);
 
-    admin.initializeApp({
+    firebaseAdminApp = admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: `https://${projectId}.firebaseio.com`
-    });
-    console.log('Firebase Admin SDK initialized successfully.');
-    // Only log the client email for Firebase Admin SDK to confirm it's using the right one
+    }, 'mainAppInstance'); // Give it a name to prevent multiple initializations if hot-reloading
+    console.log('Firebase Admin SDK initialized successfully with name:', firebaseAdminApp.name);
     console.log('Firebase Admin: Client Email from decoded JSON:', serviceAccount.client_email);
 
 } catch (error) {
@@ -80,37 +79,31 @@ let calendar;
 // Wrap the async initialization in an immediately invoked async function
 (async () => {
     try {
-        // --- IMPORTANT: Use GoogleAuth with keyFile directly ---
-        // This is the most robust way to provide service account credentials
-        // when facing persistent "No key or keyFile set" errors.
         console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
-        console.log('Current NODE_ENV:', process.env.NODE_ENV); // Useful for debugging Render vs. local
+        console.log('Current NODE_ENV:', process.env.NODE_ENV);
 
         const authClient = new google.auth.GoogleAuth({
-            keyFile: googleAuthKeyFilePath, // Point directly to the secret file path
-            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
+            keyFile: googleAuthKeyFilePath,
+            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar']
         });
 
         const authorizedClient = await authClient.getClient();
         
         console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
         console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
-        console.log('Google Calendar: Private Key (from key file, last 50 chars):', authorizedClient.credentials.private_key && authorizedClient.credentials.private_key.length > 50 ? '...' + authorizedClient.credentials.private_key.substring(authorizedClient.credentials.private_key.length - 50) : '');
-
-
+        
         calendar = google.calendar({ version: 'v3', auth: authorizedClient });
         console.log('Google Calendar API client initialized successfully using key file.');
 
     } catch (error) {
         console.error('Error initializing Google Calendar API client:', error.message);
-        calendar = null; // Set to null if initialization fails
+        calendar = null;
     }
-})(); // End of immediately invoked async function
-
+})();
 
 // Get references to Firestore and Auth services
-const db = admin.firestore();
-const auth = admin.auth();
+const db = firebaseAdminApp ? admin.firestore(firebaseAdminApp) : null;
+const auth = firebaseAdminApp ? admin.auth(firebaseAdminApp) : null;
 
 const APP_ID_FOR_FIRESTORE_PATH = process.env.APP_ID_FOR_FIRESTORE_PATH;
 if (!APP_ID_FOR_FIRESTORE_PATH) {
@@ -158,6 +151,11 @@ const verifyFirebaseToken = async (req, res, next) => {
     const idToken = authHeader.split('Bearer ')[1];
 
     try {
+        // Ensure auth is initialized before verifying token
+        if (!auth) {
+            console.error('Firebase Auth not initialized when trying to verify token.');
+            return res.status(500).json({ error: 'Server authentication service not ready.' });
+        }
         const decodedToken = await auth.verifyIdToken(idToken);
         req.uid = decodedToken.uid;
         req.user = decodedToken;
@@ -180,33 +178,30 @@ const verifyFirebaseToken = async (req, res, next) => {
  * @returns {Array} An array of conflicting booking data, or empty array if no conflicts.
  */
 const getConflictingBookings = async (date, time, duration, userTimeZone, excludeBookingId = null) => {
+    if (!db) {
+        throw new Error("Firestore DB is not initialized.");
+    }
     try {
         const proposedStart = moment.tz(`${date} ${time}`, userTimeZone);
         const proposedEnd = proposedStart.clone().add(duration, 'hours');
 
-        // Query all 'bookings' across all users for the specific date
-        // IMPORTANT: This requires a Firestore Collection Group Index on 'bookings' collection.
-        // If you get an error here, check Firebase console for index creation instructions.
         const bookingsQuery = db.collectionGroup('bookings')
-            .where('date', '==', date); // Assuming 'date' is stored as YYYY-MM-DD string
+            .where('date', '==', date)
+            .orderBy('date', 'asc')
+            .orderBy('time', 'asc');
 
         const querySnapshot = await bookingsQuery.get();
         const conflicting = [];
 
         querySnapshot.forEach(docSnapshot => {
             const booking = docSnapshot.data();
-            // Exclude the booking being edited from conflict check
             if (excludeBookingId && docSnapshot.id === excludeBookingId) {
                 return;
             }
 
-            // Reconstruct existing booking's time in its recorded timezone (or assume userTimeZone)
-            // Use userTimeZone for consistency, as we're comparing against the new proposed booking
             const existingStart = moment.tz(`${booking.date} ${booking.time}`, booking.userTimeZone || userTimeZone);
             const existingEnd = existingStart.clone().add(booking.duration, 'hours');
 
-            // Check for overlap:
-            // (proposedStart < existingEnd AND proposedEnd > existingStart)
             if (proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart)) {
                 conflicting.push({ id: docSnapshot.id, ...booking });
             }
@@ -214,7 +209,8 @@ const getConflictingBookings = async (date, time, duration, userTimeZone, exclud
         return conflicting;
     } catch (error) {
         console.error('Error getting conflicting bookings:', error);
-        throw new Error('Failed to check for booking conflicts.');
+        // Re-throw the original error to preserve Firestore details
+        throw error; 
     }
 };
 
@@ -230,6 +226,12 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 
     if (!displayName || typeof displayName !== 'string' || displayName.trim() === '') {
         return res.status(400).json({ error: 'Display name is required and must be a non-empty string.' });
+    }
+    if (!auth) {
+        return res.status(500).json({ error: 'Authentication service not initialized.' });
+    }
+    if (!db) {
+        return res.status(500).json({ error: 'Database service not initialized.' });
     }
 
     try {
@@ -267,6 +269,9 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
 
     if (!date || !time || isNaN(duration) || !userTimeZone) {
         return res.status(400).json({ error: 'Date, time, duration, and userTimeZone are required booking data.' });
+    }
+    if (!db) {
+        return res.status(500).json({ error: 'Database service not initialized.' });
     }
 
     try {
@@ -397,6 +402,7 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error confirming booking or creating calendar event (Firestore/overall):', error);
+        // Re-throw the original error to preserve Firestore details
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
     }
 });
@@ -413,25 +419,28 @@ app.get('/api/check-booked-slots', verifyFirebaseToken, async (req, res) => {
     if (!date) {
         return res.status(400).json({ error: 'Date query parameter is required (YYYY-MM-DD).' });
     }
+    if (!db) {
+        return res.status(500).json({ error: 'Database service not initialized.' });
+    }
 
     try {
-        // Query all 'bookings' across all users for the specific date
-        // IMPORTANT: This requires a Firestore Collection Group Index on 'bookings' collection.
         const bookingsQuery = db.collectionGroup('bookings')
-            .where('date', '==', date);
+            .where('date', '==', date)
+            .orderBy('date', 'asc')
+            .orderBy('time', 'asc');
 
         const querySnapshot = await bookingsQuery.get();
         const bookedSlots = [];
 
         querySnapshot.forEach(docSnapshot => {
             const booking = docSnapshot.data();
-            // Return simplified booking data for booked slots
             bookedSlots.push({
                 id: docSnapshot.id,
                 date: booking.date,
                 time: booking.time,
                 duration: booking.duration,
-                userName: booking.userName || 'Unknown User' // Include user name for display
+                userName: booking.userName || 'Unknown User',
+                userTimeZone: booking.userTimeZone || 'Asia/Jakarta' // Ensure userTimeZone is present for frontend calculations
             });
         });
 
@@ -439,7 +448,8 @@ app.get('/api/check-booked-slots', verifyFirebaseToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error fetching booked slots:', error);
-        return res.status(500).json({ error: 'Failed to fetch booked slots.' });
+        // Re-throw the original error to preserve Firestore details
+        return res.status(500).json({ error: 'Failed to fetch booked slots.', details: error.message });
     }
 });
 
@@ -476,11 +486,15 @@ app.delete('/api/cancel-calendar-event', verifyFirebaseToken, async (req, res) =
 
 
 // Start the server
-app.listen(port, () => {
-    console.log(`Standalone backend listening on port ${port}`);
-    console.log(`Access at: http://localhost:${port}`);
-    console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
-    console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
-    console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
-    console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
-});
+// Added a small delay to ensure Firebase Admin SDK is fully initialized before the server starts listening.
+// This is a diagnostic step to rule out timing issues.
+setTimeout(() => {
+    app.listen(port, () => {
+        console.log(`Standalone backend listening on port ${port}`);
+        console.log(`Access at: http://localhost:${port}`);
+        console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
+        console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
+        console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
+        console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
+    });
+}, 5000); // 5-second delay to allow SDK initialization
