@@ -10,6 +10,25 @@ const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
 const fs = require('fs'); // Import Node.js File System module
 
+// --- Utility Functions (Copied from Frontend - REQUIRED for Backend Logic) ---
+/**
+ * Calculates the end time given a start time and duration in hours.
+ * This is needed for Google Calendar event creation.
+ * @param {string} startTime - The start time string (e.g., '09:00').
+ * @param {number} durationHours - The duration in hours.
+ * @returns {string} The end time string (e.g., '11:00').
+ */
+const getEndTime = (startTime, durationHours) => {
+    if (!startTime || isNaN(durationHours)) return '';
+    const [hour, minute] = startTime.split(':');
+    const start = new Date();
+    start.setHours(parseInt(hour), parseInt(minute), 0, 0);
+    start.setHours(start.getHours() + durationHours);
+    // Ensure the output format matches what's needed for the description
+    // For description, we need a 24-hour format (e.g., "11:00" or "14:00")
+    return `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+};
+
 // --- Firebase Admin SDK Initialization ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -64,6 +83,7 @@ let calendar;
         // This is the most robust way to provide service account credentials
         // when facing persistent "No key or keyFile set" errors.
         console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
+        console.log('Current NODE_ENV:', process.env.NODE_ENV); // Useful for debugging Render vs. local
 
         const authClient = new google.auth.GoogleAuth({
             keyFile: googleAuthKeyFilePath, // Point directly to the secret file path
@@ -72,7 +92,10 @@ let calendar;
 
         const authorizedClient = await authClient.getClient(); // Get an authorized client instance
         
-        // Log details from the loaded credentials for debugging (optional but recommended)
+        // Log details from the loaded credentials after getClient() resolves
+        // These logs were previously showing 'undefined' or 'NOT LOADED' because
+        // they were accessed immediately after constructing authClient, before
+        // getClient() had a chance to fetch/load credentials.
         console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
         console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
         console.log('Google Calendar: Private Key (from key file, last 50 chars):', authorizedClient.credentials.private_key && authorizedClient.credentials.private_key.length > 50 ? '...' + authorizedClient.credentials.private_key.substring(authorizedClient.credentials.private_key.length - 50) : '');
