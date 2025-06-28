@@ -238,24 +238,29 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         }
 
         // --- 2. Create/Update Google Calendar Event ---
+        let calendarEventId = null; // Initialize to null
         if (calendar && googleCalendarId) {
             const { date, time, duration } = bookingData;
-            const startDate = new Date(`${date}T${time}:00`); // Parse date and time
-            const endDate = new Date(startDate.getTime() + duration * 60 * 60 * 1000); // Add duration in hours
+            
+            // Define the timezone offset for Asia/Makassar (WITA is UTC+8)
+            const timezoneOffset = '+08:00'; 
+            
+            // Construct startDate explicitly with the timezone offset
+            const startDate = new Date(`${date}T${time}:00${timezoneOffset}`); 
+            // Calculate endDate relative to the adjusted startDate
+            const endDate = new Date(startDate.getTime() + duration * 60 * 60 * 1000); 
 
             const event = {
                 summary: `DJ Studio Booking by ${userName}`,
                 description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${getEndTime(time, duration)}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
                 start: {
                     dateTime: startDate.toISOString(),
-                    timeZone: 'Asia/Makassar', // Assuming WITA timezone based on your context
+                    timeZone: 'Asia/Makassar', // This tells Google Calendar the event is IN this timezone
                 },
                 end: {
                     dateTime: endDate.toISOString(),
-                    timeZone: 'Asia/Makassar', // Assuming WITA timezone
+                    timeZone: 'Asia/Makassar', // This tells Google Calendar the event is IN this timezone
                 },
-                // Optional: Add attendees, reminders, etc.
-                // attendees: [{ email: 'your_email@example.com' }], // Add your own email to receive invitations
                 reminders: {
                     useDefault: false,
                     overrides: [
@@ -265,20 +270,23 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 },
             };
 
-            // If it's an update, try to find and update existing event (requires storing eventId)
-            // For simplicity here, we'll always create a new one unless you add eventId to booking data
-            // Or, if editing, you could try to search for the event by title/description and update it.
-            // For this basic implementation, we'll add a new event or handle the case where we don't update directly.
-            // A more advanced solution would store the calendarEventId in Firestore with the booking.
+            try {
+                const response = await calendar.events.insert({
+                    calendarId: googleCalendarId,
+                    resource: event,
+                    sendUpdates: 'all' // 'all' sends email updates to attendees, 'none' does not
+                });
+                calendarEventId = response.data.id; // Store the Google Calendar Event ID
+                console.log('Calendar event created:', response.data.htmlLink, 'Event ID:', calendarEventId);
 
-            const response = await calendar.events.insert({
-                calendarId: googleCalendarId,
-                resource: event,
-                sendUpdates: 'all' // 'all' sends email updates to attendees, 'none' does not
-            });
-            console.log('Calendar event created:', response.data.htmlLink);
-            // You might want to store response.data.id (calendarEventId) in your Firestore booking document
-            // for future updates or deletions of the calendar event.
+                // Update the Firestore booking with the Google Calendar Event ID
+                await bookingDocRef.set({ calendarEventId: calendarEventId }, { merge: true });
+                console.log(`Firestore booking ${bookingDocRef.id} updated with calendarEventId: ${calendarEventId}`);
+
+            } catch (calendarError) {
+                console.error('Error creating Google Calendar event:', calendarError.message);
+                // Continue with Firestore save even if calendar event creation fails
+            }
 
         } else {
             console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation.');
@@ -286,13 +294,44 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: editingBookingId ? 'Booking updated and calendar event added!' : 'Booking confirmed and calendar event added!',
-            bookingId: bookingDocRef.id
+            message: editingBookingId ? 'Booking updated and calendar event (attempted)!' : 'Booking confirmed and calendar event (attempted)!',
+            bookingId: bookingDocRef.id,
+            calendarEventId: calendarEventId // Send the calendar event ID back to the frontend
         });
 
     } catch (error) {
-        console.error('Error confirming booking or creating calendar event:', error);
+        console.error('Error confirming booking or creating calendar event (Firestore part):', error);
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
+    }
+});
+
+/**
+ * DELETE /api/cancel-calendar-event
+ * Handles deleting an event from Google Calendar.
+ * Requires an authenticated Firebase user and a valid ID Token.
+ */
+app.delete('/api/cancel-calendar-event', verifyFirebaseToken, async (req, res) => {
+    const { calendarEventId } = req.body; // Expect event ID in request body
+
+    if (!calendarEventId) {
+        return res.status(400).json({ error: 'Calendar event ID is required.' });
+    }
+
+    if (!calendar || !googleCalendarId) {
+        console.warn('Google Calendar API not initialized or calendar ID not set. Cannot delete event.');
+        return res.status(500).json({ error: 'Backend calendar service not ready.' });
+    }
+
+    try {
+        await calendar.events.delete({
+            calendarId: googleCalendarId,
+            eventId: calendarEventId
+        });
+        console.log(`Google Calendar event ${calendarEventId} deleted successfully.`);
+        res.status(200).json({ success: true, message: 'Calendar event deleted successfully.' });
+    } catch (error) {
+        console.error(`Error deleting Google Calendar event ${calendarEventId}:`, error.message);
+        return res.status(500).json({ error: 'Failed to delete calendar event.', details: error.message });
     }
 });
 
@@ -303,4 +342,5 @@ app.listen(port, () => {
     console.log(`Access at: http://localhost:${port}`);
     console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
     console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
+    console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
 });
