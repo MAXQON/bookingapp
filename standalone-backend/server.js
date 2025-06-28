@@ -38,6 +38,11 @@ try {
         databaseURL: `https://${projectId}.firebaseio.com`
     });
     console.log('Firebase Admin SDK initialized successfully.');
+    // Log serviceAccount details after successful parsing
+    console.log('Service Account Client Email (from decoded JSON):', serviceAccount.client_email);
+    console.log('Service Account Private Key (first 50 chars from decoded JSON):', serviceAccount.private_key ? serviceAccount.private_key.substring(0, 50) + '...' : 'NOT FOUND');
+    console.log('Service Account Private Key (last 50 chars from decoded JSON):', serviceAccount.private_key && serviceAccount.private_key.length > 50 ? '...' + serviceAccount.private_key.substring(serviceAccount.private_key.length - 50) : '');
+
 } catch (error) {
     console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK.', error.message);
     process.exit(1);
@@ -49,7 +54,12 @@ try {
     // IMPORTANT: Replace escaped newlines for the private key
     // When environment variables are parsed, "\n" might be treated as literal backslash-n,
     // not an actual newline character. This ensures the JWT client gets the correct format.
-    const privateKey = serviceAccount.private_key.replace(/\\n/g, '\n');
+    const privateKey = serviceAccount.private_key ? serviceAccount.private_key.replace(/\\n/g, '\n') : '';
+
+    console.log('Private Key (after \\n replace, first 50 chars):', privateKey ? privateKey.substring(0, 50) + '...' : 'NOT FOUND or EMPTY');
+    console.log('Private Key (after \\n replace, last 50 chars):', privateKey && privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
+    console.log('Client Email used for JWT:', serviceAccount.client_email);
+
 
     const jwtClient = new google.auth.JWT(
         serviceAccount.client_email,
