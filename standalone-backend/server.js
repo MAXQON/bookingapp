@@ -1,4 +1,3 @@
-
 // standalone-backend/server.js
 
 // Load environment variables from .env file (for local development)
@@ -204,7 +203,7 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 
 /**
  * POST /api/confirm-booking
- * Handles creating a booking in Firestore and adding an event to Google Calendar.
+ * Handles creating or updating a booking in Firestore and adding/updating an event to Google Calendar.
  * Requires an authenticated Firebase user and a valid ID Token.
  */
 app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
@@ -216,19 +215,33 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
     }
 
     try {
-        // --- 1. Save/Update Booking in Firestore ---
+        // --- 1. Determine Firestore Document Reference and existing calendarEventId ---
         const bookingsCollectionRef = db.collection(`artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${uid}/bookings`);
         let bookingDocRef;
+        let existingCalendarEventId = null;
+
         if (editingBookingId) {
+            // If editing an existing booking, get its document reference
             bookingDocRef = bookingsCollectionRef.doc(editingBookingId);
-            await bookingDocRef.set({
-                ...bookingData,
-                userId: uid,
-                userName: userName,
-                timestamp: admin.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            console.log(`Booking UPDATED in Firestore: ${editingBookingId}`);
+            // Attempt to fetch the existing document to get its calendarEventId
+            const existingBookingSnap = await bookingDocRef.get();
+            if (existingBookingSnap.exists) {
+                const existingBookingData = existingBookingSnap.data();
+                existingCalendarEventId = existingBookingData.calendarEventId || null;
+                console.log(`Editing booking ${editingBookingId}. Existing calendarEventId: ${existingCalendarEventId}`);
+            } else {
+                console.warn(`Attempted to edit booking ${editingBookingId} but it does not exist in Firestore.`);
+                // Fallback to adding if document doesn't exist, though frontend should prevent this.
+                bookingDocRef = await bookingsCollectionRef.add({
+                    ...bookingData,
+                    userId: uid,
+                    userName: userName,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
+                });
+                console.log(`Booking ${editingBookingId} not found, created as new with ID: ${bookingDocRef.id}`);
+            }
         } else {
+            // If it's a new booking, create a new document reference
             bookingDocRef = await bookingsCollectionRef.add({
                 ...bookingData,
                 userId: uid,
@@ -238,8 +251,19 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             console.log(`Booking ADDED to Firestore: ${bookingDocRef.id}`);
         }
 
-        // --- 2. Create/Update Google Calendar Event ---
-        let calendarEventId = null; // Initialize to null
+        // --- 2. Update Firestore Booking Data (after determining docRef) ---
+        // Ensure the latest data is always saved to the document
+        await bookingDocRef.set({
+            ...bookingData,
+            userId: uid,
+            userName: userName,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log(`Firestore booking ${bookingDocRef.id} updated/set.`);
+
+
+        // --- 3. Create/Update Google Calendar Event ---
+        let newOrUpdatedCalendarEventId = existingCalendarEventId; // Start with existing ID
         if (calendar && googleCalendarId) {
             const { date, time, duration } = bookingData;
             
@@ -258,7 +282,7 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             const startDateISO = startDateTimeLocal.toISOString();
             const endDateISO = endDateTimeLocal.toISOString();
 
-            const event = {
+            const eventResource = {
                 summary: `DJ Studio Booking by ${userName}`,
                 description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${getEndTime(time, duration)}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
                 start: {
@@ -279,36 +303,52 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             };
 
             try {
-                const response = await calendar.events.insert({
-                    calendarId: googleCalendarId,
-                    resource: event,
-                    sendUpdates: 'all' // 'all' sends email updates to attendees, 'none' does not
-                });
-                calendarEventId = response.data.id; // Store the Google Calendar Event ID
-                console.log('Calendar event created:', response.data.htmlLink, 'Event ID:', calendarEventId);
+                let response;
+                if (existingCalendarEventId) {
+                    // Update existing event if ID is available
+                    response = await calendar.events.update({
+                        calendarId: googleCalendarId,
+                        eventId: existingCalendarEventId,
+                        resource: eventResource,
+                        sendUpdates: 'all'
+                    });
+                    newOrUpdatedCalendarEventId = response.data.id; // Confirm ID, should be the same
+                    console.log('Calendar event UPDATED:', response.data.htmlLink, 'Event ID:', newOrUpdatedCalendarEventId);
+                } else {
+                    // Create new event if no existing ID
+                    response = await calendar.events.insert({
+                        calendarId: googleCalendarId,
+                        resource: eventResource,
+                        sendUpdates: 'all'
+                    });
+                    newOrUpdatedCalendarEventId = response.data.id; // Get new event ID
+                    console.log('Calendar event CREATED:', response.data.htmlLink, 'Event ID:', newOrUpdatedCalendarEventId);
+                }
 
-                // Update the Firestore booking with the Google Calendar Event ID
-                await bookingDocRef.set({ calendarEventId: calendarEventId }, { merge: true });
-                console.log(`Firestore booking ${bookingDocRef.id} updated with calendarEventId: ${calendarEventId}`);
+                // Always update the Firestore booking with the latest Google Calendar Event ID
+                await bookingDocRef.set({ calendarEventId: newOrUpdatedCalendarEventId }, { merge: true });
+                console.log(`Firestore booking ${bookingDocRef.id} updated with calendarEventId: ${newOrUpdatedCalendarEventId}`);
 
             } catch (calendarError) {
-                console.error('Error creating Google Calendar event:', calendarError.message);
-                // Continue with Firestore save even if calendar event creation fails
+                console.error(`Error ${existingCalendarEventId ? 'updating' : 'creating'} Google Calendar event:`, calendarError.message);
+                // Important: If a calendar error occurs, do NOT set calendarEventId to null in Firestore
+                // It means the event either failed to be created/updated, or the existing one is still there.
+                // We let `newOrUpdatedCalendarEventId` retain its value (null or old ID) if the operation fails.
             }
 
         } else {
-            console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation.');
+            console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation/update.');
         }
 
         res.status(200).json({
             success: true,
             message: editingBookingId ? 'Booking updated and calendar event (attempted)!' : 'Booking confirmed and calendar event (attempted)!',
             bookingId: bookingDocRef.id,
-            calendarEventId: calendarEventId // Send the calendar event ID back to the frontend
+            calendarEventId: newOrUpdatedCalendarEventId // Send the new/updated calendar event ID back
         });
 
     } catch (error) {
-        console.error('Error confirming booking or creating calendar event (Firestore part):', error);
+        console.error('Error confirming booking or creating calendar event (Firestore/overall):', error);
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
     }
 });
@@ -339,6 +379,10 @@ app.delete('/api/cancel-calendar-event', verifyFirebaseToken, async (req, res) =
         res.status(200).json({ success: true, message: 'Calendar event deleted successfully.' });
     } catch (error) {
         console.error(`Error deleting Google Calendar event ${calendarEventId}:`, error.message);
+        // Do not return 500 error for frontend if the Firestore delete will still happen.
+        // Frontend needs to know if the calendar delete failed but Firebase delete still can.
+        // It's better to just log and send a success for Firestore part, or a specific warning.
+        // For now, returning 500 if calendar delete fails to flag it.
         return res.status(500).json({ error: 'Failed to delete calendar event.', details: error.message });
     }
 });
