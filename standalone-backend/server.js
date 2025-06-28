@@ -14,6 +14,10 @@ const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE6
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID; // New: Get Google Calendar ID
 
+// New: Get the raw private key directly from a separate environment variable
+const googlePrivateKeyRaw = process.env.GOOGLE_PRIVATE_KEY_RAW;
+const googleClientEmail = process.env.GOOGLE_CLIENT_EMAIL; // Use this directly for JWT auth
+
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
     console.error('FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 not defined.');
@@ -27,8 +31,18 @@ if (!googleCalendarId) {
     console.error('FATAL ERROR: GOOGLE_CALENDAR_ID not defined. Calendar integration will not work.');
     // Do not exit, but log an error, as core app might still function without calendar.
 }
+if (!googlePrivateKeyRaw) {
+    console.error('FATAL ERROR: GOOGLE_PRIVATE_KEY_RAW not defined. Google Calendar JWT client cannot be authorized.');
+    // Exit as calendar functionality is critical for this integration.
+    process.exit(1);
+}
+if (!googleClientEmail) {
+    console.error('FATAL ERROR: GOOGLE_CLIENT_EMAIL not defined. Google Calendar JWT client cannot be authorized.');
+    process.exit(1);
+}
 
-let serviceAccount;
+
+let serviceAccount; // This will still hold the parsed service account for Firebase Admin SDK
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     serviceAccount = JSON.parse(decodedServiceAccountJson);
@@ -38,10 +52,8 @@ try {
         databaseURL: `https://${projectId}.firebaseio.com`
     });
     console.log('Firebase Admin SDK initialized successfully.');
-    // Log serviceAccount details after successful parsing
-    console.log('Service Account Client Email (from decoded JSON):', serviceAccount.client_email);
-    console.log('Service Account Private Key (first 50 chars from decoded JSON):', serviceAccount.private_key ? serviceAccount.private_key.substring(0, 50) + '...' : 'NOT FOUND');
-    console.log('Service Account Private Key (last 50 chars from decoded JSON):', serviceAccount.private_key && serviceAccount.private_key.length > 50 ? '...' + serviceAccount.private_key.substring(serviceAccount.private_key.length - 50) : '');
+    console.log('Service Account Client Email (from decoded JSON, for Firebase Admin):', serviceAccount.client_email);
+    console.log('Service Account Private Key (first 50 chars from decoded JSON, for Firebase Admin):', serviceAccount.private_key ? serviceAccount.private_key.substring(0, 50) + '...' : 'NOT FOUND');
 
 } catch (error) {
     console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK.', error.message);
@@ -51,18 +63,17 @@ try {
 // Initialize Google Calendar API client
 let calendar;
 try {
-    // IMPORTANT: Replace escaped newlines for the private key
-    // When environment variables are parsed, "\n" might be treated as literal backslash-n,
-    // not an actual newline character. This ensures the JWT client gets the correct format.
-    const privateKey = serviceAccount.private_key ? serviceAccount.private_key.replace(/\\n/g, '\n') : '';
+    // Use the raw private key from the new environment variable,
+    // explicitly replacing escaped newlines.
+    const privateKey = googlePrivateKeyRaw.replace(/\\n/g, '\n');
 
-    console.log('Private Key (after \\n replace, first 50 chars):', privateKey ? privateKey.substring(0, 50) + '...' : 'NOT FOUND or EMPTY');
-    console.log('Private Key (after \\n replace, last 50 chars):', privateKey && privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
-    console.log('Client Email used for JWT:', serviceAccount.client_email);
+    console.log('Private Key (from GOOGLE_PRIVATE_KEY_RAW, after \\n replace, first 50 chars):', privateKey ? privateKey.substring(0, 50) + '...' : 'NOT FOUND or EMPTY');
+    console.log('Private Key (from GOOGLE_PRIVATE_KEY_RAW, after \\n replace, last 50 chars):', privateKey && privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
+    console.log('Client Email used for JWT (from GOOGLE_CLIENT_EMAIL env):', googleClientEmail);
 
 
     const jwtClient = new google.auth.JWT(
-        serviceAccount.client_email,
+        googleClientEmail, // Use the new dedicated environment variable
         null,
         privateKey, // Use the corrected privateKey here
         ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
