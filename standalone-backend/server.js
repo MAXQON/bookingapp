@@ -46,10 +46,15 @@ try {
 // Initialize Google Calendar API client
 let calendar;
 try {
+    // IMPORTANT: Replace escaped newlines for the private key
+    // When environment variables are parsed, "\n" might be treated as literal backslash-n,
+    // not an actual newline character. This ensures the JWT client gets the correct format.
+    const privateKey = serviceAccount.private_key.replace(/\\n/g, '\n');
+
     const jwtClient = new google.auth.JWT(
         serviceAccount.client_email,
         null,
-        serviceAccount.private_key,
+        privateKey, // Use the corrected privateKey here
         ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
     );
 
