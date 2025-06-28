@@ -57,32 +57,35 @@ try {
 
 // Initialize Google Calendar API client
 let calendar;
-try {
-    // --- IMPORTANT: Use GoogleAuth with keyFile directly ---
-    // This is the most robust way to provide service account credentials
-    // when facing persistent "No key or keyFile set" errors.
-    console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
+// Wrap the async initialization in an immediately invoked async function
+(async () => {
+    try {
+        // --- IMPORTANT: Use GoogleAuth with keyFile directly ---
+        // This is the most robust way to provide service account credentials
+        // when facing persistent "No key or keyFile set" errors.
+        console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
 
-    const authClient = new google.auth.GoogleAuth({
-        keyFile: googleAuthKeyFilePath, // Point directly to the secret file path
-        scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
-    });
+        const authClient = new google.auth.GoogleAuth({
+            keyFile: googleAuthKeyFilePath, // Point directly to the secret file path
+            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
+        });
 
-    const authorizedClient = await authClient.getClient(); // Get an authorized client instance
-    
-    // Log details from the loaded credentials for debugging (optional but recommended)
-    console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
-    console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
-    console.log('Google Calendar: Private Key (from key file, last 50 chars):', authorizedClient.credentials.private_key && authorizedClient.credentials.private_key.length > 50 ? '...' + authorizedClient.credentials.private_key.substring(authorizedClient.credentials.private_key.length - 50) : '');
+        const authorizedClient = await authClient.getClient(); // Get an authorized client instance
+        
+        // Log details from the loaded credentials for debugging (optional but recommended)
+        console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
+        console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
+        console.log('Google Calendar: Private Key (from key file, last 50 chars):', authorizedClient.credentials.private_key && authorizedClient.credentials.private_key.length > 50 ? '...' + authorizedClient.credentials.private_key.substring(authorizedClient.credentials.private_key.length - 50) : '');
 
 
-    calendar = google.calendar({ version: 'v3', auth: authorizedClient });
-    console.log('Google Calendar API client initialized successfully using key file.');
+        calendar = google.calendar({ version: 'v3', auth: authorizedClient });
+        console.log('Google Calendar API client initialized successfully using key file.');
 
-} catch (error) {
-    console.error('Error initializing Google Calendar API client:', error.message);
-    calendar = null; // Set to null if initialization fails
-}
+    } catch (error) {
+        console.error('Error initializing Google Calendar API client:', error.message);
+        calendar = null; // Set to null if initialization fails
+    }
+})(); // End of immediately invoked async function
 
 
 // Get references to Firestore and Auth services
