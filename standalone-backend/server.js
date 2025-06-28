@@ -9,7 +9,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
 const fs = require('fs'); // Import Node.js File System module
-const moment = require('moment-timezone'); // NEW: Import moment-timezone
+const moment = require('moment-timezone'); // Import moment-timezone
 
 // --- Utility Functions (Copied from Frontend - REQUIRED for Backend Logic) ---
 /**
@@ -168,6 +168,57 @@ const verifyFirebaseToken = async (req, res, next) => {
     }
 };
 
+// --- Helper Function for Conflict Checking ---
+/**
+ * Checks for overlapping bookings for a given date and time range.
+ * This performs a collection group query for 'bookings' across all users.
+ * @param {string} date - The date in YYYY-MM-DD format.
+ * @param {string} time - The start time in HH:MM format.
+ * @param {number} duration - The duration in hours.
+ * @param {string} userTimeZone - The IANA timezone string (e.g., 'Asia/Makassar').
+ * @param {string} [excludeBookingId=null] - Optional ID of a booking to exclude from conflict check (for edits).
+ * @returns {Array} An array of conflicting booking data, or empty array if no conflicts.
+ */
+const getConflictingBookings = async (date, time, duration, userTimeZone, excludeBookingId = null) => {
+    try {
+        const proposedStart = moment.tz(`${date} ${time}`, userTimeZone);
+        const proposedEnd = proposedStart.clone().add(duration, 'hours');
+
+        // Query all 'bookings' across all users for the specific date
+        // IMPORTANT: This requires a Firestore Collection Group Index on 'bookings' collection.
+        // If you get an error here, check Firebase console for index creation instructions.
+        const bookingsQuery = db.collectionGroup('bookings')
+            .where('date', '==', date); // Assuming 'date' is stored as YYYY-MM-DD string
+
+        const querySnapshot = await bookingsQuery.get();
+        const conflicting = [];
+
+        querySnapshot.forEach(docSnapshot => {
+            const booking = docSnapshot.data();
+            // Exclude the booking being edited from conflict check
+            if (excludeBookingId && docSnapshot.id === excludeBookingId) {
+                return;
+            }
+
+            // Reconstruct existing booking's time in its recorded timezone (or assume userTimeZone)
+            // Use userTimeZone for consistency, as we're comparing against the new proposed booking
+            const existingStart = moment.tz(`${booking.date} ${booking.time}`, booking.userTimeZone || userTimeZone);
+            const existingEnd = existingStart.clone().add(booking.duration, 'hours');
+
+            // Check for overlap:
+            // (proposedStart < existingEnd AND proposedEnd > existingStart)
+            if (proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart)) {
+                conflicting.push({ id: docSnapshot.id, ...booking });
+            }
+        });
+        return conflicting;
+    } catch (error) {
+        console.error('Error getting conflicting bookings:', error);
+        throw new Error('Failed to check for booking conflicts.');
+    }
+};
+
+
 // --- Routes ---
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'DJ Booking Backend is running!' });
@@ -201,6 +252,7 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 /**
  * POST /api/confirm-booking
  * Handles creating or updating a booking in Firestore and adding/updating an event to Google Calendar.
+ * Includes conflict checking.
  * Requires an authenticated Firebase user and a valid ID Token.
  */
 app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
@@ -211,15 +263,31 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         return res.status(400).json({ error: 'Booking data is required.' });
     }
 
-    // NEW: Get userTimeZone from bookingData
     const { date, time, duration, userTimeZone } = bookingData;
 
-    // Validate date, time, duration, userTimeZone
     if (!date || !time || isNaN(duration) || !userTimeZone) {
         return res.status(400).json({ error: 'Date, time, duration, and userTimeZone are required booking data.' });
     }
 
     try {
+        // --- CONFLICT CHECK ---
+        const conflictingBookings = await getConflictingBookings(date, time, duration, userTimeZone, editingBookingId);
+        if (conflictingBookings.length > 0) {
+            console.log(`Booking conflict detected for user ${uid}:`, conflictingBookings);
+            // Return 409 Conflict status
+            return res.status(409).json({
+                error: 'The selected time slot is already booked. Please choose another time.',
+                conflictingSlots: conflictingBookings.map(b => ({
+                    date: b.date,
+                    time: b.time,
+                    duration: b.duration,
+                    userName: b.userName
+                }))
+            });
+        }
+        // --- END CONFLICT CHECK ---
+
+
         // --- 1. Determine Firestore Document Reference and existing calendarEventId ---
         const bookingsCollectionRef = db.collection(`artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${uid}/bookings`);
         let bookingDocRef;
@@ -234,7 +302,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 console.log(`Editing booking ${editingBookingId}. Existing calendarEventId: ${existingCalendarEventId}`);
             } else {
                 console.warn(`Attempted to edit booking ${editingBookingId} but it does not exist in Firestore. Creating as new.`);
-                // Fallback to adding if document doesn't exist, though frontend should prevent this.
                 bookingDocRef = await bookingsCollectionRef.add({
                     ...bookingData,
                     userId: uid,
@@ -267,7 +334,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         let newOrUpdatedCalendarEventId = existingCalendarEventId; 
         if (calendar && googleCalendarId) {
             try {
-                // Use moment-timezone to create timezone-aware datetime objects
                 const startMoment = moment.tz(`${date} ${time}`, userTimeZone);
                 const endMoment = startMoment.clone().add(duration, 'hours');
 
@@ -275,12 +341,12 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                     summary: `DJ Studio Booking by ${userName}`,
                     description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${endMoment.format('HH:mm')}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
                     start: {
-                        dateTime: startMoment.toISOString(), // ISOString is UTC, but Google Calendar will adjust using timeZone
-                        timeZone: userTimeZone, // Explicitly set the timezone for the event
+                        dateTime: startMoment.toISOString(),
+                        timeZone: userTimeZone,
                     },
                     end: {
-                        dateTime: endMoment.toISOString(), // ISOString is UTC, but Google Calendar will adjust using timeZone
-                        timeZone: userTimeZone, // Explicitly set the timezone for the event
+                        dateTime: endMoment.toISOString(),
+                        timeZone: userTimeZone,
                     },
                     reminders: {
                         useDefault: false,
@@ -336,6 +402,49 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
 });
 
 /**
+ * GET /api/check-booked-slots
+ * Returns all currently booked time slots for a given date.
+ * Query parameter: `date` (YYYY-MM-DD).
+ * Requires authentication.
+ */
+app.get('/api/check-booked-slots', verifyFirebaseToken, async (req, res) => {
+    const { date } = req.query; // Get date from query parameters
+
+    if (!date) {
+        return res.status(400).json({ error: 'Date query parameter is required (YYYY-MM-DD).' });
+    }
+
+    try {
+        // Query all 'bookings' across all users for the specific date
+        // IMPORTANT: This requires a Firestore Collection Group Index on 'bookings' collection.
+        const bookingsQuery = db.collectionGroup('bookings')
+            .where('date', '==', date);
+
+        const querySnapshot = await bookingsQuery.get();
+        const bookedSlots = [];
+
+        querySnapshot.forEach(docSnapshot => {
+            const booking = docSnapshot.data();
+            // Return simplified booking data for booked slots
+            bookedSlots.push({
+                id: docSnapshot.id,
+                date: booking.date,
+                time: booking.time,
+                duration: booking.duration,
+                userName: booking.userName || 'Unknown User' // Include user name for display
+            });
+        });
+
+        res.status(200).json({ bookedSlots: bookedSlots });
+
+    } catch (error) {
+        console.error('Error fetching booked slots:', error);
+        return res.status(500).json({ error: 'Failed to fetch booked slots.' });
+    }
+});
+
+
+/**
  * DELETE /api/cancel-calendar-event
  * Handles deleting an event from Google Calendar.
  * Requires an authenticated Firebase user and a valid ID Token.
@@ -373,4 +482,5 @@ app.listen(port, () => {
     console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
     console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
     console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
+    console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
 });
