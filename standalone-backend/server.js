@@ -8,11 +8,15 @@ const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
+const fs = require('fs'); // Import Node.js File System module
 
 // --- Firebase Admin SDK Initialization ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID; // New: Get Google Calendar ID
+
+// New: Get the path to the Google Service Account key file from environment variable
+const googleAuthKeyFilePath = process.env.GOOGLE_AUTH_KEY_FILE_PATH;
 
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
@@ -27,8 +31,13 @@ if (!googleCalendarId) {
     console.error('FATAL ERROR: GOOGLE_CALENDAR_ID not defined. Calendar integration will not work.');
     // Do not exit, but log an error, as core app might still function without calendar.
 }
+if (!googleAuthKeyFilePath) {
+    console.error('FATAL ERROR: GOOGLE_AUTH_KEY_FILE_PATH not defined. Google Calendar integration will not work.');
+    process.exit(1); // Exit if critical path for Google Calendar is missing
+}
 
-let serviceAccount; // This will hold the parsed service account JSON object
+
+let serviceAccount; // This will hold the parsed service account JSON object for Firebase Admin
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     serviceAccount = JSON.parse(decodedServiceAccountJson);
@@ -38,8 +47,8 @@ try {
         databaseURL: `https://${projectId}.firebaseio.com`
     });
     console.log('Firebase Admin SDK initialized successfully.');
-    console.log('Service Account Client Email (from decoded JSON, for Firebase Admin):', serviceAccount.client_email);
-    console.log('Service Account Private Key (first 50 chars from decoded JSON, for Firebase Admin):', serviceAccount.private_key ? serviceAccount.private_key.substring(0, 50) + '...' : 'NOT FOUND');
+    // Only log the client email for Firebase Admin SDK to confirm it's using the right one
+    console.log('Firebase Admin: Client Email from decoded JSON:', serviceAccount.client_email);
 
 } catch (error) {
     console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK.', error.message);
@@ -49,43 +58,27 @@ try {
 // Initialize Google Calendar API client
 let calendar;
 try {
-    // --- IMPORTANT: Use credentials directly from the parsed serviceAccount object ---
-    // This ensures consistency and avoids potential parsing issues with separate env vars.
-    // Still apply the newline replacement as a safeguard, but it's now applied to the property
-    // of the parsed JSON.
-    const privateKey = serviceAccount.private_key ? serviceAccount.private_key.replace(/\\n/g, '\n') : '';
-    const clientEmail = serviceAccount.client_email;
+    // --- IMPORTANT: Use GoogleAuth with keyFile directly ---
+    // This is the most robust way to provide service account credentials
+    // when facing persistent "No key or keyFile set" errors.
+    console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
 
-    // Validate that the necessary parts are present before creating JWT client
-    if (!clientEmail) {
-        throw new Error('Service Account client_email is missing from the decoded service account JSON.');
-    }
-    if (!privateKey) {
-        throw new Error('Service Account private_key is missing or empty after processing.');
-    }
-
-    console.log('Private Key (from serviceAccount object, after \\n replace, first 50 chars):', privateKey.substring(0, 50) + '...');
-    console.log('Private Key (from serviceAccount object, after \\n replace, last 50 chars):', privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
-    console.log('Client Email used for JWT (from serviceAccount object):', clientEmail);
-
-
-    const jwtClient = new google.auth.JWT(
-        clientEmail, // Use clientEmail from the parsed serviceAccount
-        null,
-        privateKey, // Use privateKey from the parsed serviceAccount
-        ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
-    );
-
-    jwtClient.authorize((err, tokens) => {
-        if (err) {
-            console.error('Error authorizing JWT client for Google Calendar:', err);
-            return;
-        }
-        console.log('Google Calendar JWT client authorized.');
+    const authClient = new google.auth.GoogleAuth({
+        keyFile: googleAuthKeyFilePath, // Point directly to the secret file path
+        scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
     });
 
-    calendar = google.calendar({ version: 'v3', auth: jwtClient });
-    console.log('Google Calendar API client initialized.');
+    const authorizedClient = await authClient.getClient(); // Get an authorized client instance
+    
+    // Log details from the loaded credentials for debugging (optional but recommended)
+    console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
+    console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
+    console.log('Google Calendar: Private Key (from key file, last 50 chars):', authorizedClient.credentials.private_key && authorizedClient.credentials.private_key.length > 50 ? '...' + authorizedClient.credentials.private_key.substring(authorizedClient.credentials.private_key.length - 50) : '');
+
+
+    calendar = google.calendar({ version: 'v3', auth: authorizedClient });
+    console.log('Google Calendar API client initialized successfully using key file.');
+
 } catch (error) {
     console.error('Error initializing Google Calendar API client:', error.message);
     calendar = null; // Set to null if initialization fails
