@@ -14,10 +14,6 @@ const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE6
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID; // New: Get Google Calendar ID
 
-// New: Get the raw private key directly from a separate environment variable
-const googlePrivateKeyRaw = process.env.GOOGLE_PRIVATE_KEY_RAW;
-const googleClientEmail = process.env.GOOGLE_CLIENT_EMAIL; // Use this directly for JWT auth
-
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
     console.error('FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 not defined.');
@@ -31,18 +27,8 @@ if (!googleCalendarId) {
     console.error('FATAL ERROR: GOOGLE_CALENDAR_ID not defined. Calendar integration will not work.');
     // Do not exit, but log an error, as core app might still function without calendar.
 }
-if (!googlePrivateKeyRaw) {
-    console.error('FATAL ERROR: GOOGLE_PRIVATE_KEY_RAW not defined. Google Calendar JWT client cannot be authorized.');
-    // Exit as calendar functionality is critical for this integration.
-    process.exit(1);
-}
-if (!googleClientEmail) {
-    console.error('FATAL ERROR: GOOGLE_CLIENT_EMAIL not defined. Google Calendar JWT client cannot be authorized.');
-    process.exit(1);
-}
 
-
-let serviceAccount; // This will still hold the parsed service account for Firebase Admin SDK
+let serviceAccount; // This will hold the parsed service account JSON object
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     serviceAccount = JSON.parse(decodedServiceAccountJson);
@@ -63,19 +49,30 @@ try {
 // Initialize Google Calendar API client
 let calendar;
 try {
-    // Use the raw private key from the new environment variable,
-    // explicitly replacing escaped newlines.
-    const privateKey = googlePrivateKeyRaw.replace(/\\n/g, '\n');
+    // --- IMPORTANT: Use credentials directly from the parsed serviceAccount object ---
+    // This ensures consistency and avoids potential parsing issues with separate env vars.
+    // Still apply the newline replacement as a safeguard, but it's now applied to the property
+    // of the parsed JSON.
+    const privateKey = serviceAccount.private_key ? serviceAccount.private_key.replace(/\\n/g, '\n') : '';
+    const clientEmail = serviceAccount.client_email;
 
-    console.log('Private Key (from GOOGLE_PRIVATE_KEY_RAW, after \\n replace, first 50 chars):', privateKey ? privateKey.substring(0, 50) + '...' : 'NOT FOUND or EMPTY');
-    console.log('Private Key (from GOOGLE_PRIVATE_KEY_RAW, after \\n replace, last 50 chars):', privateKey && privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
-    console.log('Client Email used for JWT (from GOOGLE_CLIENT_EMAIL env):', googleClientEmail);
+    // Validate that the necessary parts are present before creating JWT client
+    if (!clientEmail) {
+        throw new Error('Service Account client_email is missing from the decoded service account JSON.');
+    }
+    if (!privateKey) {
+        throw new Error('Service Account private_key is missing or empty after processing.');
+    }
+
+    console.log('Private Key (from serviceAccount object, after \\n replace, first 50 chars):', privateKey.substring(0, 50) + '...');
+    console.log('Private Key (from serviceAccount object, after \\n replace, last 50 chars):', privateKey.length > 50 ? '...' + privateKey.substring(privateKey.length - 50) : '');
+    console.log('Client Email used for JWT (from serviceAccount object):', clientEmail);
 
 
     const jwtClient = new google.auth.JWT(
-        googleClientEmail, // Use the new dedicated environment variable
+        clientEmail, // Use clientEmail from the parsed serviceAccount
         null,
-        privateKey, // Use the corrected privateKey here
+        privateKey, // Use privateKey from the parsed serviceAccount
         ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
     );
 
