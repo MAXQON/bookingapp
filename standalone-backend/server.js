@@ -32,7 +32,11 @@ if (!googleCalendarId) {
 let serviceAccount;
 =======
 
+
 let serviceAccount; // This will hold the parsed service account JSON object for Firebase Admin
+<<<<<<< HEAD
+>>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
+=======
 >>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
@@ -44,7 +48,10 @@ try {
     });
     console.log('Firebase Admin SDK initialized successfully.');
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
     // Only log the client email for Firebase Admin SDK to confirm it's using the right one
     console.log('Firebase Admin: Client Email from decoded JSON:', serviceAccount.client_email);
 
@@ -111,6 +118,9 @@ try {
     }
 })(); // End of immediately invoked async function
 
+<<<<<<< HEAD
+>>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
+=======
 >>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
 
 // Get references to Firestore and Auth services
@@ -360,6 +370,9 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         console.error('Error confirming booking or creating calendar event:', error);
 =======
         console.error('Error confirming booking or creating calendar event (Firestore/overall):', error);
+<<<<<<< HEAD
+>>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
+=======
 >>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
     }
@@ -449,6 +462,11 @@ app.listen(port, () => {
     console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
     console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+    console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
+    console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
+>>>>>>> parent of ced1bc8 (Index Troubleshooting Attempt (Delay + Logging))
 =======
     console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
     console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
