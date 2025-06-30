@@ -34,12 +34,21 @@ try {
     serviceAccount = JSON.parse(decodedServiceAccountJson); 
     console.log('Service account JSON decoded and parsed successfully from environment variable.');
 
-    // --- IMPORTANT: Normalize the private_key here ---
-    // Ensure consistent line endings and trim whitespace.
+    // --- IMPORTANT: Robust Normalization of the private_key here ---
+    // This is to combat very subtle formatting issues that can cause "No key or keyFile set" errors.
     if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\r\n/g, '\n').trim();
+        // Strip BEGIN/END markers, remove all whitespace, then re-add standard markers and newlines.
+        let cleanedPrivateKey = serviceAccount.private_key
+            .replace(/-----BEGIN PRIVATE KEY-----/, '')
+            .replace(/-----END PRIVATE KEY-----/, '')
+            .replace(/\s+/g, '') // Remove all whitespace (spaces, tabs, newlines)
+            .trim(); // Ensure no leading/trailing whitespace
+
+        // Reconstruct the private key with standard formatting
+        serviceAccount.private_key = `-----BEGIN PRIVATE KEY-----\n${cleanedPrivateKey}\n-----END PRIVATE KEY-----\n`;
+        console.log('Private key string normalized for Google Calendar JWT client.');
     }
-    // --- END NORMALIZATION ---
+    // --- END ROBUST NORMALIZATION ---
 
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
@@ -47,7 +56,7 @@ try {
     });
     console.log('Firebase Admin SDK initialized successfully.');
 } catch (error) {
-    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value or format after decoding/parsing.', error.message);
+    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value or format after decoding/parsing and normalization.', error.message);
     process.exit(1);
 }
 
@@ -75,7 +84,11 @@ async function initializeGoogleCalendar() {
         console.log(`Debug: private_key length: ${serviceAccount.private_key ? serviceAccount.private_key.length : 'N/A'}`);
         // Log a truncated version of the private key for inspection, but be mindful of exposing full key
         if (serviceAccount.private_key) {
-            console.log(`Debug: private_key preview: ${serviceAccount.private_key.substring(0, 50)}...${serviceAccount.private_key.substring(serviceAccount.private_key.length - 50)}`);
+            console.log(`Debug: private_key preview (first 50): ${serviceAccount.private_key.substring(0, 50)}`);
+            console.log(`Debug: private_key preview (last 50): ${serviceAccount.private_key.substring(serviceAccount.private_key.length - 50)}`);
+            // Check for newlines at specific positions (start and end of actual key body)
+            console.log(`Debug: private_key char at 32: '${serviceAccount.private_key.charAt(32)}' (should be '\\n')`); // After BEGIN PRIVATE KEY
+            console.log(`Debug: private_key char at length-32: '${serviceAccount.private_key.charAt(serviceAccount.private_key.length - 32)}' (should be '\\n')`); // Before END PRIVATE KEY
         }
         // --- END DEBUG LOGGING ---
 
