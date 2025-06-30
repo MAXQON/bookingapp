@@ -12,6 +12,7 @@ import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
 // --- Firebase Configuration (Client-Side) ---
+// This config is still needed for your frontend to directly interact with Firebase Auth and Firestore
 const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02';
 const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
@@ -22,28 +23,11 @@ const FIREBASE_CONFIG = {
     appId: "1:909871533345:web:939fa5b6c8203ad4308260",
     measurementId: "G-NF4XH5S2QC"
 };
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas will override this
-
-// --- Initialize Firebase App, Firestore, and Auth outside the component ---
-// This ensures Firebase is initialized once when the module loads,
-// making instances readily available for all hooks and functions.
-let app;
-let db;
-let auth;
-
-try {
-    app = initializeApp(FIREBASE_CONFIG);
-    db = getFirestore(app);
-    auth = getAuth(app);
-    console.log("Firebase app, DB, Auth instances initialized globally in App.jsx.");
-} catch (e) {
-    console.error("Firebase Global Initialization Error:", e);
-    // Handle this error outside React state if it prevents the app from rendering.
-    // For now, we'll let the component's state handle reporting this.
-}
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas-specific, leave as null for GitHub Pages
 
 // --- Backend API Base URL ---
-const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // IMPORTANT: Replace with your actual Node.js Render URL
+// IMPORTANT: Replace 'YOUR_RENDER_PYTHON_BACKEND_URL_HERE' with your actual Render URL.
+const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com'; // e.g., 'https://phyon-back-end.onrender.com'
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
@@ -92,14 +76,16 @@ function BookingApp() {
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
     const [bookingToDelete, setBookingToDelete] = useState(null);
 
-    // Firebase state (now directly uses global `db` and `auth` variables,
-    // so `dbInstance` and `authInstance` states are removed)
+    // Firebase state
     const [userId, setUserId] = useState(null);
     const [userName, setUserName] = useState(''); // Store user's display name
+    const [firebaseAppInstance, setFirebaseAppInstance] = useState(null);
+    const [dbInstance, setDbInstance] = useState(null);
+    const [authInstance, setAuthInstance] = useState(null);
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const [isLoadingBookings, setIsLoadingBookings] = useState(false);
-    const [error, setError] = useState(null); // General errors
-    const [authError, setAuthError] = useState(null); // Auth-specific errors
+    const [error, setError] = useState(null);
+    const [authError, setAuthError] = useState(null);
 
     // Authentication UI State
     const [showAuthModal, setShowAuthModal] = useState(false);
@@ -116,18 +102,35 @@ function BookingApp() {
     // Ref for scrolling to the booking form
     const bookingFormRef = useRef(null);
 
-    // --- EFFECT 1: Handle Firebase Authentication State & User Profile ---
-    // Now directly uses the globally initialized 'auth' instance.
+    // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
-        if (!auth) { // Check if global 'auth' was initialized successfully
-            console.log("Global auth instance not ready, skipping auth state listener.");
-            setAuthError("Firebase authentication service could not be initialized.");
+        try {
+            console.log("Initializing Firebase app...");
+            const app = initializeApp(FIREBASE_CONFIG);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+
+            setFirebaseAppInstance(app);
+            setDbInstance(db);
+            setAuthInstance(auth);
+            console.log("Firebase app, DB, Auth instances set.");
+
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            setError(`Firebase Initialization Error: ${e.message}`);
             setIsLoadingAuth(false);
+        }
+    }, []);
+
+    // --- EFFECT 2: Handle Firebase Authentication State & User Profile ---
+    useEffect(() => {
+        if (!authInstance || !dbInstance) {
+            console.log("Auth or DB instance not ready, skipping auth state listener.");
             return;
         }
 
         console.log("Setting up auth state listener...");
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
             if (user) {
                 setUserId(user.uid);
                 setAuthError(null);
@@ -137,17 +140,18 @@ function BookingApp() {
                 try {
                     setProfileLoading(true);
                     setProfileError(null);
-                    // Use global 'db' instance directly
-                    const userProfileDocRef = doc(db, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
+                    // Use the same path as in your backend and security rules
+                    const userProfileDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
                     const userProfileSnap = await getDoc(userProfileDocRef);
 
-                    let displayNameToUse = user.displayName || user.email;
+                    let displayNameToUse = user.displayName || user.email; // Default from Auth or email
                     if (userProfileSnap.exists()) {
                         const profileData = userProfileSnap.data();
-                        displayNameToUse = profileData.displayName || displayNameToUse;
+                        displayNameToUse = profileData.displayName || displayNameToUse; // Prefer Firestore name
                         setUserName(displayNameToUse);
-                        setNewDisplayName(displayNameToUse);
+                        setNewDisplayName(displayNameToUse); // Set for profile modal
                     } else {
+                        // Create a new profile document if it doesn't exist using the Auth display name
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
                             displayName: displayNameToUse,
@@ -162,28 +166,17 @@ function BookingApp() {
                 } catch (profileFetchError) {
                     console.error("Error fetching/creating user profile:", profileFetchError);
                     setProfileError(`Failed to load profile: ${profileFetchError.message}`);
-                    setUserName(user.uid);
+                    setUserName(user.uid); // Fallback to UID if profile fails
                 } finally {
                     setProfileLoading(false);
                 }
 
             } else {
-                console.log("Auth state changed: User is signed out. Attempting anonymous sign-in or custom token.");
-                try {
-                    if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
-                        await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                    setUserId(auth.currentUser?.uid || null); // Use actual UID or null if not available
-                    setAuthError(null);
-                } catch (anonAuthError) {
-                    console.error("Anonymous/Custom token sign-in error:", anonAuthError);
-                    setAuthError(`Authentication failed: ${anonAuthError.message}`);
-                    setUserId(null); // Ensure userId is null on failed auth
-                }
-                setUserName('');
+                console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
+                setUserId(null);
+                setUserName(''); // Clear name on logout
                 setNewDisplayName('');
+                setAuthError(null);
                 setProfileError(null);
             }
             setIsLoadingAuth(false);
@@ -193,14 +186,12 @@ function BookingApp() {
             console.log("Cleaning up auth state listener.");
             unsubscribe();
         };
-    }, [auth, db, APP_ID_FOR_FIRESTORE_PATH]); // Depend on global 'auth' and 'db'
+    }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
 
-    // --- EFFECT 2: Firestore Bookings Real-time Listener ---
-    // Now directly uses the globally initialized 'db' instance.
+    // --- EFFECT 3: Firestore Bookings Real-time Listener ---
     useEffect(() => {
-        // Now also checking for global 'db' being defined.
-        if (!db || userId === null || isLoadingAuth || authError) {
-            console.log("Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { db, userId, isLoadingAuth, authError });
+        if (!dbInstance || userId === null || isLoadingAuth || authError) {
+            console.log("Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
             setBookings([]);
             setIsLoadingBookings(false);
             return;
@@ -212,8 +203,7 @@ function BookingApp() {
         const collectionPath = `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`;
         console.log("Attempting to listen to Firestore collection:", collectionPath, "with userId:", userId);
 
-        // Use global 'db' instance directly
-        const bookingsCollectionRef = collection(db, collectionPath);
+        const bookingsCollectionRef = collection(dbInstance, collectionPath);
         const q = query(bookingsCollectionRef);
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -236,7 +226,7 @@ function BookingApp() {
             console.log("Cleaning up Firestore listener.");
             unsubscribe();
         };
-    }, [db, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]); // Depend on global 'db'
+    }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
 
     // Memoized values
     const today = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -266,49 +256,47 @@ function BookingApp() {
     }, []);
 
     // --- Authentication Handlers ---
-    // Now directly uses the globally initialized 'auth' instance.
     const handleSignUp = useCallback(async () => {
-        if (!auth) {
+        if (!authInstance) {
             setAuthError("Authentication service not available.");
             return;
         }
         setAuthError(null);
         try {
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const userCredential = await createUserWithEmailAndPassword(authInstance, email, password);
             console.log("User signed up successfully!", userCredential.user);
+            // Default display name for Auth user, Firestore profile will pick this up
             await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
 
         } catch (error) {
             console.error("Sign-up error:", error);
             setAuthError(`Sign-up failed: ${error.message}`);
         }
-    }, [auth, email, password]);
+    }, [authInstance, email, password]);
 
-    // Now directly uses the globally initialized 'auth' instance.
     const handleSignIn = useCallback(async () => {
-        if (!auth) {
+        if (!authInstance) {
             setAuthError("Authentication service not available.");
             return;
         }
         setAuthError(null);
         try {
-            await signInWithEmailAndPassword(auth, email, password);
+            await signInWithEmailAndPassword(authInstance, email, password);
             console.log("User signed in successfully!");
         } catch (error) {
             console.error("Sign-in error:", error);
             setAuthError(`Sign-in failed: ${error.message}`);
         }
-    }, [auth, email, password]);
+    }, [authInstance, email, password]);
 
-    // Now directly uses the globally initialized 'auth' instance.
     const handleGoogleSignIn = useCallback(async () => {
-        if (!auth) {
+        if (!authInstance) {
             setAuthError("Authentication service not available.");
             return;
         }
         setAuthError(null);
         try {
-            await signInWithPopup(auth, new GoogleAuthProvider());
+            await signInWithPopup(authInstance, new GoogleAuthProvider()); // Use new GoogleAuthProvider()
             console.log("User signed in with Google successfully!");
         } catch (error) {
             console.error("Google Sign-in error:", error);
@@ -320,15 +308,14 @@ function BookingApp() {
                 setAuthError(`Google Sign-in failed: ${error.message}`);
             }
         }
-    }, [auth]);
+    }, [authInstance]);
 
-    // Now directly uses the globally initialized 'auth' instance.
     const handleLogout = useCallback(async () => {
-        if (!auth) return;
+        if (!authInstance) return;
         try {
-            await signOut(auth);
+            await signOut(authInstance);
             setUserId(null);
-            setUserName('');
+            setUserName(''); // Clear name on logout
             setBookings([]);
             console.log("User logged out.");
             setEditingBookingId(null);
@@ -342,14 +329,14 @@ function BookingApp() {
             console.error("Logout error:", error);
             setError(`Logout failed: ${error.message}`);
         }
-    }, [auth]);
+    }, [authInstance]);
 
-    // --- Handle User Profile Update (calls standalone backend) ---
-    // Now directly uses the globally initialized 'auth' instance.
+    // --- Handle User Profile Update (now calls standalone backend) ---
     const handleUpdateProfile = useCallback(async () => {
-        if (!userId || !auth?.currentUser) return; // Optional chaining for currentUser
+        if (!userId || !authInstance.currentUser || !authInstance) return; // Ensure authInstance is available
 
-        const idToken = await auth.currentUser.getIdToken();
+        // Get the current ID token for authentication with your backend
+        const idToken = await authInstance.currentUser.getIdToken();
 
         if (!newDisplayName.trim()) {
             setProfileError("Display name cannot be empty.");
@@ -363,7 +350,7 @@ function BookingApp() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}`
+                    'Authorization': `Bearer ${idToken}` // Send the ID Token for verification
                 },
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
@@ -374,6 +361,7 @@ function BookingApp() {
                 throw new Error(data.error || 'Failed to update profile via backend.');
             }
 
+            // If backend successful, update local state
             setUserName(newDisplayName.trim());
             setShowProfileModal(false);
             console.log("User profile updated successfully via standalone backend!");
@@ -384,97 +372,72 @@ function BookingApp() {
         } finally {
             setProfileLoading(false);
         }
-    }, [userId, auth, newDisplayName]);
+    }, [userId, authInstance, newDisplayName]); // Removed dbInstance as it's not directly used here now
 
 
-    // --- Handle Booking Submission (now calls standalone backend's confirm-booking endpoint) ---
+    // --- Handle Booking Submission (new/update) ---
     const handleBooking = useCallback(() => {
         if (!selectedDate || !selectedTime) {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        // Now directly uses global 'auth' and 'db' for prerequisites.
-        if (!userId || !auth?.currentUser || isLoadingBookings || profileLoading || authError || profileError) {
+        if (!userId || !dbInstance || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, isLoadingBookings, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError });
             return;
         }
 
         if (selectedPaymentMethod === 'online') {
             setShowPaymentSimulationModal(true);
         } else {
-            // For cash, directly confirm booking via backend
-            confirmBookingViaBackend('pending');
+            confirmBooking('pending');
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, auth, isLoadingBookings, profileLoading, authError, profileError, selectedPaymentMethod]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError, selectedPaymentMethod]);
 
 
-    // --- Function to actually confirm and save/update the booking VIA BACKEND ---
-    // Now directly uses the globally initialized 'auth' instance.
-    const confirmBookingViaBackend = useCallback(async (paymentStatus) => {
+    // --- Function to actually confirm and save/update the booking to Firestore ---
+    const confirmBooking = useCallback(async (paymentStatus) => {
         try {
             setError(null);
             setIsLoadingBookings(true);
-            const idToken = await auth.currentUser.getIdToken();
-            console.log("Firebase ID Token acquired for backend call. Length:", idToken.length, "Starts with:", idToken.substring(0, 10), "...");
+            const totalCost = calculateTotal();
 
-            // Determine the user name to send. Prefer 'userName' state, fallback to Auth's display name, then email, then UID.
-            let userDisplayNameForBackend = userName;
-            if (!userDisplayNameForBackend && auth.currentUser) {
-                userDisplayNameForBackend = auth.currentUser.displayName || auth.currentUser.email || userId;
-            } else if (!userDisplayNameForBackend) {
-                userDisplayNameForBackend = 'Anonymous User'; // Fallback for genuinely anonymous or very early state
+            let currentUserName = userName;
+            if (!currentUserName && authInstance.currentUser) {
+                currentUserName = authInstance.currentUser.displayName || authInstance.currentUser.email || userId;
+            } else if (!currentUserName) {
+                currentUserName = 'Anonymous User';
             }
 
-
-            const bookingDataToSend = {
+            const newBookingData = {
                 date: selectedDate,
                 time: selectedTime,
                 duration: duration,
                 equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-                total: calculateTotal(),
+                total: totalCost,
+                userId: userId,
+                userName: currentUserName, // Store the user's name with the booking
+                timestamp: serverTimestamp(),
                 paymentMethod: selectedPaymentMethod,
                 paymentStatus: paymentStatus,
                 userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone // ADDED: Send user's local timezone
             };
 
-            const payload = {
-                bookingData: bookingDataToSend,
-                userName: userDisplayNameForBackend, // Send current userName for the backend to use
-                editingBookingId: editingBookingId // Send editing ID if in edit mode
-            };
+            const bookingsCollectionRef = collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`);
 
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}`
-                },
-                body: JSON.stringify(payload)
-            });
-
-            // IMPORTANT DEBUGGING STEP: Log raw response text before attempting JSON parsing
-            const responseText = await response.text();
-            console.log('Raw response text from confirm-booking:', responseText);
-
-            let data;
-            try {
-                data = JSON.parse(responseText); // Attempt to parse the text as JSON
-            } catch (jsonParseError) {
-                console.error('JSON Parse Error for confirm-booking:', jsonParseError);
-                throw new Error(`JSON.parse error from backend: ${jsonParseError.message}. Raw response: ${responseText.substring(0, 200)}...`);
-            }
-            
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to confirm booking via backend.');
+            if (editingBookingId) {
+                const bookingDocRef = doc(bookingsCollectionRef, editingBookingId);
+                await setDoc(bookingDocRef, newBookingData, { merge: true });
+                console.log("Booking successfully UPDATED with ID:", editingBookingId);
+                setCurrentBooking({ ...newBookingData, id: editingBookingId, timestamp: new Date() });
+                setShowConfirmation(true);
+            } else {
+                const docRef = await addDoc(bookingsCollectionRef, newBookingData);
+                console.log("Booking successfully ADDED with ID:", docRef.id);
+                setCurrentBooking({ ...newBookingData, id: docRef.id, timestamp: new Date() });
+                setShowConfirmation(true);
             }
 
-            // Backend returns success and the actual booking ID (Firestore ID)
-            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: paymentStatus });
-            setShowConfirmation(true);
-
-            // Reset form fields and edit mode after successful operation
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
@@ -483,14 +446,13 @@ function BookingApp() {
             setSelectedPaymentMethod('cash');
 
         } catch (bookingError) {
-            console.error('Error confirming booking via backend:', bookingError);
-            setError(`Failed to confirm session: ${bookingError.message}`);
+            console.error(`Error ${editingBookingId ? 'updating' : 'adding'} booking to Firestore:`, bookingError);
+            setError(`Failed to ${editingBookingId ? 'update' : 'book'} session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
             setShowPaymentSimulationModal(false);
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, editingBookingId, auth, selectedPaymentMethod]);
-
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, dbInstance, selectedPaymentMethod, APP_ID_FOR_FIRESTORE_PATH, editingBookingId, authInstance]);
 
     // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
@@ -508,22 +470,19 @@ function BookingApp() {
     }, []);
 
     // --- Handle Cancel Button Click ---
-    // Now directly uses the globally initialized 'db' instance.
     const handleCancelBooking = useCallback((booking) => {
         setBookingToDelete(booking);
         setShowDeleteConfirmation(true);
     }, []);
 
     // --- Confirm Delete Action ---
-    // Now directly uses the globally initialized 'db' and 'auth' instances.
     const confirmDeleteBooking = useCallback(async () => {
-        // Ensure global 'db' and 'auth' are available
-        if (!bookingToDelete || !db || !userId || !auth?.currentUser) return;
+        if (!bookingToDelete || !dbInstance || !userId) return;
 
         try {
             setError(null);
             setIsLoadingBookings(true);
-            const bookingDocRef = doc(collection(db, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
+            const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
             
             // Fetch the very latest booking data from Firestore before attempting deletion
             // This ensures we have the correct calendarEventId, especially if it was just added/updated
@@ -540,7 +499,7 @@ function BookingApp() {
             // First, attempt to delete from Google Calendar via backend
             if (calendarEventIdForDeletion) {
                 try {
-                    const idToken = await auth.currentUser.getIdToken(); // Use global auth
+                    const idToken = await authInstance.currentUser.getIdToken();
                     const response = await fetch(`${BACKEND_API_BASE_URL}/api/cancel-calendar-event`, {
                         method: 'DELETE',
                         headers: {
@@ -578,12 +537,11 @@ function BookingApp() {
             setShowDeleteConfirmation(false);
             setBookingToDelete(null);
         }
-    }, [bookingToDelete, db, userId, auth, BACKEND_API_BASE_URL, APP_ID_FOR_FIRESTORE_PATH]);
+    }, [bookingToDelete, dbInstance, userId, authInstance, BACKEND_API_BASE_URL, APP_ID_FOR_FIRESTORE_PATH]);
 
 
     // Display loading state for authentication or if Firebase is not initialized, or if auth failed
-    // Now checks global 'app' for initialization status.
-    if (isLoadingAuth || !app || authError || profileLoading) {
+    if (isLoadingAuth || !firebaseAppInstance || authError || profileLoading) {
         return (
             <div className="bg-gray-900 min-h-screen flex items-center justify-center text-orange-200 text-2xl p-4 text-center">
                 {authError ? `Authentication Error: ${authError}` : profileLoading ? "Loading profile..." : "Authenticating Firebase..."}
@@ -1123,7 +1081,7 @@ function BookingApp() {
                                     onClick={() => {
                                         setShowProfileModal(false);
                                         setProfileError(null);
-                                        setNewDisplayName(userName);
+                                        setNewDisplayName(userName); // Reset newDisplayName to current userName if user cancels
                                     }}
                                     className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
                                 >
@@ -1147,7 +1105,7 @@ function BookingApp() {
                             </p>
                             <div className="flex justify-center gap-4">
                                 <button
-                                    onClick={() => confirmBookingViaBackend('paid')} // Calls the backend function
+                                    onClick={() => confirmBooking('paid')}
                                     className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
                                 >
                                     Confirm Payment (Simulated)

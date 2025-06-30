@@ -17,75 +17,52 @@ import pytz
 app = Flask(__name__)
 
 # Configure CORS - Allow all origins for development, specify origins for production
-# This allows your frontend (e.g., hosted on Render or GitHub Pages) to communicate with this backend.
 CORS(app)
 
 # --- Firebase Admin SDK Initialization ---
-# Ensure the environment variable is set in Render.
-# The service account key JSON is base64 encoded to safely pass it as an environment variable.
 firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY_BASE64')
 
 if firebase_service_account_key_base64:
     try:
-        # Decode the base64 string to bytes, then decode bytes to UTF-8 string
         service_account_info_str = firebase_service_account_key_base64.encode('utf-8').decode('base64')
         service_account_info = json.loads(service_account_info_str)
         
-        # Log service account details for debugging (excluding sensitive parts)
         print("Service account JSON decoded and parsed successfully from FIREBASE_SERVICE_ACCOUNT_KEY_BASE64.")
         print("Debug: Firebase Admin SDK Service Account Details:")
         print(f"  Project ID: {service_account_info.get('project_id', 'N/A')}")
         print(f"  Client Email: {service_account_info.get('client_email', 'N/A')}")
         
-        # Only show a preview of the private key, not the whole thing
-        private_key_preview = service_account_info.get('private_key', 'N/A')
-        if private_key_preview != 'N/A':
-            private_key_preview_start = private_key_preview[:50]
-            private_key_preview_end = private_key_preview[-50:]
-            print(f"  Private Key Length: {len(private_key_preview)}")
-            print(f"  Private Key Preview (first 50): {private_key_preview_start}")
-            print(f"  Private Key Preview (last 50): {private_key_preview_end}")
-        else:
-            print("  Private Key: Not found or empty.")
-        
         cred = credentials.Certificate(service_account_info)
         firebase_admin.initialize_app(cred)
-        db = firestore.client() # Initialize Firestore client
+        db = firestore.client()
         print("Firebase Admin SDK initialized successfully.")
     except Exception as e:
         print(f"Error initializing Firebase Admin SDK: {e}")
-        db = None # Ensure db is None if initialization fails
+        db = None
 else:
     print("FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 environment variable not set.")
     print("Firebase Admin SDK will not be initialized. Firestore operations will fail.")
-    db = None # Ensure db is None if environment variable is missing
+    db = None
 
 # --- Google Calendar API Initialization ---
-# Set these environment variables in Render
 GOOGLE_CALENDAR_CLIENT_ID = os.environ.get('GOOGLE_CALENDAR_CLIENT_ID')
 GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get('GOOGLE_CALENDAR_CLIENT_SECRET')
 GOOGLE_CALENDAR_REFRESH_TOKEN = os.environ.get('GOOGLE_CALENDAR_REFRESH_TOKEN')
-GOOGLE_CALENDAR_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_CALENDAR_ID') # The ID of the calendar to manage events
+GOOGLE_CALENDAR_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_CALENDAR_ID')
 
 calendar_service = None
 
 if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALENDAR_REFRESH_TOKEN:
     try:
-        # Create dummy credentials object for refreshing
         creds = Credentials(
-            token=None,  # No initial access token, will be refreshed
+            token=None,
             refresh_token=GOOGLE_CALENDAR_REFRESH_TOKEN,
             token_uri='https://oauth2.googleapis.com/token',
             client_id=GOOGLE_CALENDAR_CLIENT_ID,
             client_secret=GOOGLE_CALENDAR_CLIENT_SECRET,
-            scopes=['https://www.googleapis.com/auth/calendar.events'] # Scope for managing calendar events
+            scopes=['https://www.googleapis.com/auth/calendar.events']
         )
-        
-        # Force refresh the token to get a valid access token
-        # This will use the refresh_token to get a new access_token
         creds.refresh(requests.Request(), requests.post)
-        
-        # Build the Calendar service
         calendar_service = build('calendar', 'v3', credentials=creds)
         print("Google Calendar API service initialized successfully.")
     except Exception as e:
@@ -94,20 +71,15 @@ else:
     print("Google Calendar API environment variables (CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN) not fully set.")
     print("Google Calendar API functionality will be disabled.")
 
-
 # --- Middleware to verify Firebase ID Token ---
 @app.before_request
 def verify_firebase_token():
-    # Allow OPTIONS requests to pass through without authentication (for CORS preflight)
     if request.method == 'OPTIONS':
         return
 
-    # Define paths that do NOT require authentication
-    unprotected_paths = [
-        '/', # Home route
-    ]
+    unprotected_paths = ['/']
     if request.path in unprotected_paths:
-        request.uid = None # Explicitly set uid to None for unprotected paths
+        request.uid = None
         return
 
     auth_header = request.headers.get('Authorization')
@@ -117,8 +89,6 @@ def verify_firebase_token():
     id_token = auth_header.split(' ')[1]
     
     try:
-        # Verify the ID token using Firebase Admin SDK
-        # This also retrieves the user's UID and other claims
         decoded_token = auth.verify_id_token(id_token)
         request.uid = decoded_token['uid']
         request.user_email = decoded_token.get('email')
@@ -128,17 +98,13 @@ def verify_firebase_token():
         print(f"Error verifying Firebase ID token: {e}")
         return jsonify({"error": "Unauthorized", "message": str(e)}), 401
 
-
 # --- Routes ---
-
 @app.route('/')
 def home():
     return "Python Backend for DJ Room Booking App is running!"
 
-
 @app.route('/api/update-profile', methods=['POST'], endpoint='update_profile')
 def update_profile():
-    # This route is now protected by verify_firebase_token middleware
     if not hasattr(request, 'uid') or not request.uid:
         return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
     
@@ -161,7 +127,6 @@ def update_profile():
             'updatedAt': firestore.SERVER_TIMESTAMP
         }, merge=True)
         
-        # Also update the user's display name directly in Firebase Auth
         auth.update_user(request.uid, display_name=new_display_name)
 
         return jsonify({"message": "Profile updated successfully.", "displayName": new_display_name}), 200
@@ -169,10 +134,8 @@ def update_profile():
         print(f"Error updating profile: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
 
-
 @app.route('/api/confirm-booking', methods=['POST'], endpoint='confirm_booking')
 def confirm_booking():
-    # This route is now protected by verify_firebase_token middleware
     if not hasattr(request, 'uid') or not request.uid:
         return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
     
@@ -181,7 +144,7 @@ def confirm_booking():
 
     data = request.get_json()
     booking_data = data.get('bookingData')
-    user_name = data.get('userName', 'Anonymous User') # Get userName from frontend payload
+    user_name = data.get('userName', 'Anonymous User')
     editing_booking_id = data.get('editingBookingId')
 
     if not booking_data:
@@ -192,10 +155,9 @@ def confirm_booking():
             os.environ.get('APP_ID_FOR_FIRESTORE_PATH', 'default-app-id')
         ).collection('users').document(request.uid).collection('bookings')
 
-        # Prepare booking data for Firestore
         firestore_data = {
             "userId": request.uid,
-            "userName": user_name, # Store userName in booking document
+            "userName": user_name,
             "date": booking_data['date'],
             "time": booking_data['time'],
             "duration": booking_data['duration'],
@@ -207,14 +169,18 @@ def confirm_booking():
         }
 
         calendar_event_id = None
+        
+        # --- START ENHANCED CALENDAR LOGGING/DEBUGGING ---
+        print(f"\nAttempting Google Calendar Integration for booking {editing_booking_id if editing_booking_id else 'NEW'}.")
+        print(f"Calendar service initialized: {calendar_service is not None}")
+        print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
+
         if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID:
             try:
-                # Construct start and end times in user's timezone, then convert to RFC3339 for Google Calendar
-                selected_date = booking_data['date'] # YYYY-MM-DD
-                selected_time = booking_data['time'] # HH:MM (24-hour)
+                selected_date = booking_data['date']
+                selected_time = booking_data['time']
                 duration_hours = booking_data['duration']
 
-                # Use the user's timezone from the frontend or default to 'Asia/Jakarta'
                 user_timezone_str = booking_data.get('userTimeZone', 'Asia/Jakarta')
                 
                 try:
@@ -223,15 +189,10 @@ def confirm_booking():
                     print(f"Unknown timezone from frontend: {user_timezone_str}. Defaulting to Asia/Jakarta.")
                     user_timezone = pytz.timezone('Asia/Jakarta')
 
-                # Parse date and time to a naive datetime object
                 start_datetime_naive = datetime.datetime.strptime(f"{selected_date} {selected_time}", "%Y-%m-%d %H:%M")
-                
-                # Localize the naive datetime object to the user's timezone
                 start_datetime_localized = user_timezone.localize(start_datetime_naive)
-                
                 end_datetime_localized = start_datetime_localized + datetime.timedelta(hours=duration_hours)
 
-                # Convert to RFC3339 format
                 start_time_rfc3339 = start_datetime_localized.isoformat()
                 end_time_rfc3339 = end_datetime_localized.isoformat()
 
@@ -253,16 +214,15 @@ def confirm_booking():
                         'timeZone': user_timezone_str,
                     },
                     'attendees': [
-                        {'email': request.user_email if request.user_email else 'your-dj-studio-email@example.com', 'responseStatus': 'accepted'} # Replace with your studio's email
+                        {'email': request.user_email if request.user_email else 'your-dj-studio-email@example.com', 'responseStatus': 'accepted'}
                     ],
                     'reminders': {
                         'useDefault': False,
                         'overrides': [
-                            {'method': 'email', 'minutes': 24 * 60}, # 24 hours before
-                            {'method': 'popup', 'minutes': 30},   # 30 minutes before
+                            {'method': 'email', 'minutes': 24 * 60},
+                            {'method': 'popup', 'minutes': 30},
                         ],
                     },
-                    # Add a unique identifier for your app to the event (optional, but good for tracking)
                     'extendedProperties': {
                         'private': {
                             'appBookingId': editing_booking_id if editing_booking_id else 'new',
@@ -270,16 +230,18 @@ def confirm_booking():
                         }
                     }
                 }
+                print(f"Google Calendar event object prepared:\n{json.dumps(event, indent=2)}")
+
 
                 if editing_booking_id:
-                    # If editing, try to get the existing calendarEventId from Firestore first
                     existing_booking_doc = booking_collection_ref.document(editing_booking_id).get()
                     existing_calendar_event_id = None
                     if existing_booking_doc.exists:
                         existing_calendar_event_id = existing_booking_doc.to_dict().get('calendarEventId')
+                        print(f"Found existing calendarEventId in Firestore for edit: {existing_calendar_event_id}")
 
                     if existing_calendar_event_id:
-                        # Update existing event
+                        print(f"Attempting to UPDATE Google Calendar event with ID: {existing_calendar_event_id}")
                         event_result = calendar_service.events().update(
                             calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
                             eventId=existing_calendar_event_id, 
@@ -288,53 +250,52 @@ def confirm_booking():
                         print(f"Google Calendar event updated: {event_result.get('htmlLink')}")
                         calendar_event_id = event_result.get('id')
                     else:
-                        # Add new event if existing ID not found for update scenario
+                        print(f"No existing calendarEventId found for booking {editing_booking_id}. Attempting to INSERT NEW Google Calendar event.")
                         event_result = calendar_service.events().insert(calendarId=GOOGLE_CALENDAR_CALENDAR_ID, body=event).execute()
                         print(f"New Google Calendar event created: {event_result.get('htmlLink')}")
                         calendar_event_id = event_result.get('id')
                 else:
-                    # Create new event
+                    print("Attempting to INSERT NEW Google Calendar event.")
                     event_result = calendar_service.events().insert(calendarId=GOOGLE_CALENDAR_CALENDAR_ID, body=event).execute()
                     print(f"New Google Calendar event created: {event_result.get('htmlLink')}")
                     calendar_event_id = event_result.get('id')
                 
                 firestore_data['calendarEventId'] = calendar_event_id
+                print(f"Google Calendar event ID received: {calendar_event_id}")
 
             except Exception as e:
-                print(f"Error interacting with Google Calendar API: {e}")
-                # Log the error but don't prevent booking confirmation if calendar fails
-                # You might want to add a status to the booking indicating calendar sync failed.
+                print(f"CRITICAL ERROR during Google Calendar API interaction: {e}")
+                import traceback
+                traceback.print_exc() # Print full traceback for calendar errors
                 firestore_data['calendarSyncStatus'] = 'failed'
                 firestore_data['calendarSyncError'] = str(e)
+        else:
+            print("Google Calendar API client or calendar ID is not ready. Skipping calendar event creation.")
+        # --- END ENHANCED CALENDAR LOGGING/DEBUGGING ---
 
 
         if editing_booking_id:
-            # Update existing document
             booking_doc_ref = booking_collection_ref.document(editing_booking_id)
             booking_doc_ref.set(firestore_data, merge=True)
             booking_id = editing_booking_id
             print(f"Booking {booking_id} updated in Firestore.")
         else:
-            # Add new document
             doc_ref = booking_collection_ref.add(firestore_data)
-            booking_id = doc_ref[1].id # doc_ref is a tuple (update_time, document_reference)
+            booking_id = doc_ref[1].id
             print(f"New booking {booking_id} added to Firestore.")
 
         return jsonify({"message": "Booking confirmed successfully", "bookingId": booking_id}), 200
 
     except Exception as e:
-        print(f"Error confirming booking or calling calendar backend: {e}")
+        print(f"Overall error confirming booking or calling calendar backend: {e}")
+        import traceback
+        traceback.print_exc() # Print full traceback for overall errors
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
 
 @app.route('/api/cancel-calendar-event', methods=['DELETE'], endpoint='cancel_calendar_event')
 def cancel_calendar_event():
-    # This route is now protected by verify_firebase_token middleware
     if not hasattr(request, 'uid') or not request.uid:
         return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
-
-    if not calendar_service or not GOOGLE_CALENDAR_CALENDAR_ID:
-        return jsonify({"error": "Server Error", "message": "Google Calendar API not initialized or calendar ID missing."}), 500
 
     data = request.get_json()
     calendar_event_id = data.get('calendarEventId')
@@ -342,8 +303,16 @@ def cancel_calendar_event():
     if not calendar_event_id:
         return jsonify({"error": "Bad Request", "message": "Calendar event ID is required."}), 400
 
+    # --- START ENHANCED CALENDAR LOGGING/DEBUGGING ---
+    print(f"\nAttempting to DELETE Google Calendar Event with ID: {calendar_event_id}")
+    print(f"Calendar service initialized: {calendar_service is not None}")
+    print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
+
+    if not calendar_service or not GOOGLE_CALENDAR_CALENDAR_ID:
+        print("Google Calendar API not initialized or calendar ID missing. Cannot delete event.")
+        return jsonify({"error": "Server Error", "message": "Google Calendar API not initialized or calendar ID missing."}), 500
+
     try:
-        # Delete the event from Google Calendar
         calendar_service.events().delete(
             calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
             eventId=calendar_event_id
@@ -351,17 +320,14 @@ def cancel_calendar_event():
         print(f"Google Calendar event {calendar_event_id} deleted successfully.")
         return jsonify({"message": f"Calendar event {calendar_event_id} cancelled successfully."}), 200
     except Exception as e:
-        print(f"Error deleting Google Calendar event {calendar_event_id}: {e}")
+        print(f"CRITICAL ERROR deleting Google Calendar event {calendar_event_id}: {e}")
+        import traceback
+        traceback.print_exc() # Print full traceback for calendar errors
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
 
+# --- END ENHANCED CALENDAR LOGGING/DEBUGGING ---
 
 if __name__ == '__main__':
-    # When deploying on Render, Render sets the PORT environment variable.
-    # Flask's default run command might not pick it up.
-    # It's better to run with `gunicorn` or `waitress` in production,
-    # but for local testing or simple Render deployment, this works if you
-    # define `CMD` as `python app.py` or similar.
-    # Render's "start command" in the web service settings usually overrides this.
     port = int(os.environ.get('PORT', 5000))
     print(f"Python Calendar Backend listening on port {port}")
     app.run(host='0.0.0.0', port=port)
