@@ -34,6 +34,13 @@ try {
     serviceAccount = JSON.parse(decodedServiceAccountJson); 
     console.log('Service account JSON decoded and parsed successfully from environment variable.');
 
+    // --- IMPORTANT: Normalize the private_key here ---
+    // Ensure consistent line endings and trim whitespace.
+    if (serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\r\n/g, '\n').trim();
+    }
+    // --- END NORMALIZATION ---
+
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: `https://${projectId}.firebaseio.com`
@@ -62,7 +69,7 @@ async function initializeGoogleCalendar() {
 
     try {
         console.log('Attempting to create JWT client for Google Calendar...');
-        // --- ADDED DEBUG LOGGING HERE ---
+        // --- ADDED DEBUG LOGGING HERE (retained for now) ---
         console.log(`Debug: client_email defined: ${!!serviceAccount.client_email}`);
         console.log(`Debug: private_key defined: ${!!serviceAccount.private_key}`);
         console.log(`Debug: private_key length: ${serviceAccount.private_key ? serviceAccount.private_key.length : 'N/A'}`);
