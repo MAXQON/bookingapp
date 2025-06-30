@@ -20,7 +20,7 @@ const projectId = process.env.FIREBASE_PROJECT_ID; // Used for Firebase Admin SD
 
 // Define the URL for your new Python Calendar Backend service
 // IMPORTANT: Replace this with the actual URL of your deployed Python Flask service
-const PYTHON_CALENDAR_BACKEND_URL = process.env.PYTHON_CALENDAR_BACKEND_URL || 'http://localhost:5001'; // Default for local testing
+const PYTHON_CALENDAR_BACKEND_URL = process.env.PYTHON_CALENDAR_BACKEND_URL || 'https://phyon-back-end.onrender.com'; // Default for local testing
 
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
