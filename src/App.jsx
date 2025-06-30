@@ -11,7 +11,7 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
 import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration ---
+// --- Firebase Configuration (Client-Side) ---
 const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02';
 const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
@@ -25,10 +25,7 @@ const FIREBASE_CONFIG = {
 const INITIAL_AUTH_TOKEN_FROM_CANVAS = null;
 
 // --- Backend API Base URL ---
-// IMPORTANT: Replace this with your actual Render backend URL when deployed!
-// For local development, it might be http://localhost:5000
-// For Render, it will be something like https://bookingapp-xxxx.onrender.com
-const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // Update this to your actual backend URL
+const BACKEND_API_BASE_URL = 'https://bookingapp-9pmk.onrender.com'; // IMPORTANT: Replace with your actual Render URL
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
@@ -77,15 +74,9 @@ function BookingApp() {
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
     const [bookingToDelete, setBookingToDelete] = useState(null);
 
-    // Conflict Check state
-    const [showConflictModal, setShowConflictModal] = useState(false);
-    const [conflictError, setConflictError] = useState(null);
-    const [conflictingSlots, setConflictingSlots] = useState([]);
-    const [bookedSlotsForDate, setBookedSlotsForDate] = useState([]); // Stores all booked slots for the selected date
-
     // Firebase state
     const [userId, setUserId] = useState(null);
-    const [userName, setUserName] = useState(''); // New: Store user's display name
+    const [userName, setUserName] = useState(''); // Store user's display name
     const [firebaseAppInstance, setFirebaseAppInstance] = useState(null);
     const [dbInstance, setDbInstance] = useState(null);
     const [authInstance, setAuthInstance] = useState(null);
@@ -111,33 +102,26 @@ function BookingApp() {
 
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
-        // Only initialize if firebaseAppInstance is null to prevent re-initialization
-        if (!firebaseAppInstance) {
-            try {
-                console.log("Initializing Firebase app...");
-                const app = initializeApp(FIREBASE_CONFIG);
-                const db = getFirestore(app);
-                const auth = getAuth(app);
-                
-                setFirebaseAppInstance(app);
-                setDbInstance(db);
-                setAuthInstance(auth);
-                console.log("Firebase app, DB, Auth instances set.");
+        try {
+            console.log("Initializing Firebase app...");
+            const app = initializeApp(FIREBASE_CONFIG);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
 
-            } catch (e) {
-                console.error("Firebase Initialization Error:", e);
-                setError(`Firebase Initialization Error: ${e.message}`);
-                setIsLoadingAuth(false);
-            }
-        } else {
-            console.log("Firebase app already initialized.");
+            setFirebaseAppInstance(app);
+            setDbInstance(db);
+            setAuthInstance(auth);
+            console.log("Firebase app, DB, Auth instances set.");
+
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            setError(`Firebase Initialization Error: ${e.message}`);
+            setIsLoadingAuth(false);
         }
-    }, [firebaseAppInstance]); // Dependency on firebaseAppInstance ensures it only runs once
-
+    }, []);
 
     // --- EFFECT 2: Handle Firebase Authentication State & User Profile ---
     useEffect(() => {
-        // Depend on both authInstance and dbInstance to ensure they are available
         if (!authInstance || !dbInstance) {
             console.log("Auth or DB instance not ready, skipping auth state listener.");
             return;
@@ -150,7 +134,7 @@ function BookingApp() {
                 setAuthError(null);
                 setShowAuthModal(false);
 
-                // --- Fetch/Create User Profile ---
+                // --- Fetch/Create User Profile from Firestore ---
                 try {
                     setProfileLoading(true);
                     setProfileError(null);
@@ -200,10 +184,10 @@ function BookingApp() {
         };
     }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
 
-    // --- EFFECT 3: Firestore Bookings Real-time Listener (User-specific) ---
+    // --- EFFECT 3: Firestore Bookings Real-time Listener ---
     useEffect(() => {
         if (!dbInstance || userId === null || isLoadingAuth || authError) {
-            console.log("User-specific Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
+            console.log("Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
             setBookings([]);
             setIsLoadingBookings(false);
             return;
@@ -213,13 +197,13 @@ function BookingApp() {
         setError(null);
 
         const collectionPath = `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`;
-        console.log("Attempting to listen to user-specific Firestore collection:", collectionPath, "with userId:", userId);
+        console.log("Attempting to listen to Firestore collection:", collectionPath, "with userId:", userId);
 
         const bookingsCollectionRef = collection(dbInstance, collectionPath);
         const q = query(bookingsCollectionRef);
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            console.log("User-specific Firestore snapshot received.");
+            console.log("Firestore snapshot received.");
             const fetchedBookings = [];
             snapshot.forEach((doc) => {
                 fetchedBookings.push({ id: doc.id, ...doc.data() });
@@ -227,53 +211,18 @@ function BookingApp() {
             fetchedBookings.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
             setBookings(fetchedBookings);
             setIsLoadingBookings(false);
-            console.log("User-specific bookings updated:", fetchedBookings.length, "bookings.");
+            console.log("Bookings updated:", fetchedBookings.length, "bookings.");
         }, (firestoreError) => {
-            console.error("User-specific Firestore Error fetching bookings:", firestoreError);
-            setError(`Failed to load your bookings: ${firestoreError.message}`);
+            console.error("Firestore Error fetching bookings:", firestoreError);
+            setError(`Failed to load bookings: ${firestoreError.message}`);
             setIsLoadingBookings(false);
         });
 
         return () => {
-            console.log("Cleaning up user-specific Firestore listener.");
+            console.log("Cleaning up Firestore listener.");
             unsubscribe();
         };
     }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
-
-    // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend (for conflict check) ---
-    useEffect(() => {
-        const fetchBookedSlots = async () => {
-            if (!selectedDate || !userId || !authInstance || isLoadingAuth) {
-                setBookedSlotsForDate([]); // Clear previous booked slots if no date or user
-                return;
-            }
-
-            try {
-                // Ensure ID token is available for the backend call
-                const idToken = await authInstance.currentUser.getIdToken();
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
-                    headers: {
-                        'Authorization': `Bearer ${idToken}`
-                    }
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to fetch booked slots.');
-                }
-
-                const data = await response.json();
-                setBookedSlotsForDate(data.bookedSlots);
-                console.log(`Fetched booked slots for ${selectedDate}:`, data.bookedSlots);
-            } catch (fetchError) {
-                console.error("Error fetching booked slots:", fetchError);
-                // set Error without showing modal, as this is a background fetch
-            }
-        };
-
-        fetchBookedSlots();
-    }, [selectedDate, userId, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
-
 
     // Memoized values
     const today = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -286,50 +235,6 @@ function BookingApp() {
         }
         return slots;
     }, []);
-
-    // Filter available time slots based on fetched booked slots
-    const availableTimeSlotsForDisplay = useMemo(() => {
-        // If no date selected or no booked slots fetched yet, all are available (for UI purposes)
-        if (!selectedDate || bookedSlotsForDate.length === 0) {
-            return timeSlots;
-        }
-
-        const currentHour = new Date().getHours();
-        const currentMinute = new Date().getMinutes();
-        const todayDate = new Date().toISOString().split('T')[0];
-
-        return timeSlots.filter(slot => {
-            const slotStartMoment = moment(`${selectedDate} ${slot.value}`, 'YYYY-MM-DD HH:mm', true);
-            
-            // Disable past times on current day
-            if (selectedDate === todayDate) {
-                const slotHour = parseInt(slot.value.split(':')[0]);
-                const slotMinute = parseInt(slot.value.split(':')[1]);
-                if (slotHour < currentHour || (slotHour === currentHour && slotMinute <= currentMinute)) {
-                    return false;
-                }
-            }
-
-            // Check for overlap with any booked slot
-            const isConflicting = bookedSlotsForDate.some(bookedSlot => {
-                const bookedStartMoment = moment.tz(`${bookedSlot.date} ${bookedSlot.time}`, bookedSlot.userTimeZone);
-                const bookedEndMoment = bookedStartMoment.clone().add(bookedSlot.duration, 'hours');
-
-                const proposedEndMoment = slotStartMoment.clone().add(duration, 'hours');
-
-                // Conflict if: (proposedStart < bookedEnd AND proposedEnd > bookedStart)
-                // Also, if editing an existing booking, don't consider it a conflict with itself
-                if (editingBookingId && bookedSlot.id === editingBookingId) {
-                    return false; // This is the booking being edited, so no self-conflict
-                }
-                
-                return slotStartMoment.isBefore(bookedEndMoment) && proposedEndMoment.isAfter(bookedStartMoment);
-            });
-            return !isConflicting;
-        });
-    }, [selectedDate, bookedSlotsForDate, timeSlots, duration, editingBookingId]);
-
-
     const calculateTotal = useCallback(() => ROOM_RATE_PER_HOUR * duration, [duration]);
     const players = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'player'), []);
     const mixers = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'mixer'), []);
@@ -356,7 +261,6 @@ function BookingApp() {
         try {
             const userCredential = await createUserWithEmailAndPassword(authInstance, email, password);
             console.log("User signed up successfully!", userCredential.user);
-            // Optionally, prompt for display name immediately or set a default
             await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
 
         } catch (error) {
@@ -387,8 +291,7 @@ function BookingApp() {
         }
         setAuthError(null);
         try {
-            const provider = new GoogleAuthProvider();
-            await signInWithPopup(authInstance, provider);
+            await signInWithPopup(authInstance, new GoogleAuthProvider());
             console.log("User signed in with Google successfully!");
         } catch (error) {
             console.error("Google Sign-in error:", error);
@@ -408,9 +311,7 @@ function BookingApp() {
             await signOut(authInstance);
             setUserId(null);
             setUserName('');
-            setNewDisplayName('');
             setBookings([]);
-            setBookedSlotsForDate([]); // Clear booked slots on logout
             console.log("User logged out.");
             setEditingBookingId(null);
             setSelectedDate('');
@@ -425,9 +326,12 @@ function BookingApp() {
         }
     }, [authInstance]);
 
-    // --- Handle User Profile Update ---
+    // --- Handle User Profile Update (calls standalone backend) ---
     const handleUpdateProfile = useCallback(async () => {
-        if (!userId || !dbInstance || !authInstance.currentUser) return;
+        if (!userId || !authInstance.currentUser) return;
+
+        const idToken = await authInstance.currentUser.getIdToken();
+
         if (!newDisplayName.trim()) {
             setProfileError("Display name cannot be empty.");
             return;
@@ -436,8 +340,6 @@ function BookingApp() {
         setProfileLoading(true);
         setProfileError(null);
         try {
-            const idToken = await authInstance.currentUser.getIdToken();
-
             const response = await fetch(`${BACKEND_API_BASE_URL}/api/update-profile`, {
                 method: 'POST',
                 headers: {
@@ -447,75 +349,79 @@ function BookingApp() {
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
 
-            const data = await response.json();
+            // IMPORTANT DEBUGGING STEP: Log raw response text before attempting JSON parsing
+            const responseText = await response.text();
+            console.log('Raw response text from update-profile:', responseText);
+
+            let data;
+            try {
+                data = JSON.parse(responseText); // Attempt to parse the text as JSON
+            } catch (jsonParseError) {
+                console.error('JSON Parse Error for update-profile:', jsonParseError);
+                throw new Error(`JSON.parse error from backend: ${jsonParseError.message}. Raw response: ${responseText.substring(0, 200)}...`);
+            }
+            
+
             if (!response.ok) {
-                throw new Error(data.error || 'Failed to update profile on backend.');
+                throw new Error(data.error || 'Failed to update profile via backend.');
             }
 
-            console.log("User profile updated successfully on backend and Firebase Auth!");
             setUserName(newDisplayName.trim());
             setShowProfileModal(false);
+            console.log("User profile updated successfully via standalone backend!");
 
         } catch (error) {
-            console.error("Error updating profile:", error);
+            console.error("Error updating profile via backend:", error);
             setProfileError(`Failed to update profile: ${error.message}`);
         } finally {
             setProfileLoading(false);
         }
-    }, [userId, dbInstance, authInstance, newDisplayName, BACKEND_API_BASE_URL]);
+    }, [userId, authInstance, newDisplayName]);
 
 
-    // --- Handle Booking Submission (new/update) ---
+    // --- Handle Booking Submission (now calls standalone backend's confirm-booking endpoint) ---
     const handleBooking = useCallback(() => {
         if (!selectedDate || !selectedTime) {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !dbInstance || isLoadingAuth || profileLoading || authError || profileError) {
+        if (!userId || !authInstance.currentUser || isLoadingBookings || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, isLoadingBookings, profileLoading, authError, profileError });
             return;
         }
-
-        // Clear previous conflict errors when attempting a new booking
-        setConflictError(null);
-        setConflictingSlots([]);
-        setShowConflictModal(false);
 
         if (selectedPaymentMethod === 'online') {
             setShowPaymentSimulationModal(true);
         } else {
-            confirmBooking('pending');
+            // For cash, directly confirm booking via backend
+            confirmBookingViaBackend('pending');
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError, selectedPaymentMethod]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, isLoadingBookings, profileLoading, authError, profileError, selectedPaymentMethod]);
 
 
-    // --- Function to actually confirm and save/update the booking via Backend ---
-    const confirmBooking = useCallback(async (paymentStatus) => {
+    // --- Function to actually confirm and save/update the booking VIA BACKEND ---
+    const confirmBookingViaBackend = useCallback(async (paymentStatus) => {
         try {
             setError(null);
             setIsLoadingBookings(true);
-            const totalCost = calculateTotal();
-            
-            let currentUserName = userName;
-            if (!currentUserName && authInstance.currentUser) {
-                currentUserName = authInstance.currentUser.displayName || authInstance.currentUser.email || userId;
-            } else if (!currentUserName) {
-                currentUserName = 'Anonymous User';
-            }
+            const idToken = await authInstance.currentUser.getIdToken();
 
-            const bookingDataForBackend = {
+            const bookingDataToSend = {
                 date: selectedDate,
                 time: selectedTime,
                 duration: duration,
                 equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-                total: totalCost,
+                total: calculateTotal(),
                 paymentMethod: selectedPaymentMethod,
-                paymentStatus: paymentStatus,
-                userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                paymentStatus: paymentStatus
             };
 
-            const idToken = await authInstance.currentUser.getIdToken();
+            const payload = {
+                bookingData: bookingDataToSend,
+                userName: userName, // Send current userName for the backend to use
+                editingBookingId: editingBookingId // Send editing ID if in edit mode
+            };
 
             const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
                 method: 'POST',
@@ -523,33 +429,28 @@ function BookingApp() {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${idToken}`
                 },
-                body: JSON.stringify({
-                    bookingData: bookingDataForBackend,
-                    userName: currentUserName,
-                    editingBookingId: editingBookingId
-                })
+                body: JSON.stringify(payload)
             });
 
-            const data = await response.json();
+            // IMPORTANT DEBUGGING STEP: Log raw response text before attempting JSON parsing
+            const responseText = await response.text();
+            console.log('Raw response text from confirm-booking:', responseText);
+
+            let data;
+            try {
+                data = JSON.parse(responseText); // Attempt to parse the text as JSON
+            } catch (jsonParseError) {
+                console.error('JSON Parse Error for confirm-booking:', jsonParseError);
+                throw new Error(`JSON.parse error from backend: ${jsonParseError.message}. Raw response: ${responseText.substring(0, 200)}...`);
+            }
+            
+
             if (!response.ok) {
-                if (response.status === 409) { // Conflict detected
-                    console.warn("Booking conflict:", data.error, data.conflictingSlots);
-                    setConflictError(data.error);
-                    setConflictingSlots(data.conflictingSlots);
-                    setShowConflictModal(true); // Show the conflict modal
-                    setError(null); // Clear general error, show specific conflict error
-                    return; // Stop here, don't proceed with booking confirmation
-                }
                 throw new Error(data.error || 'Failed to confirm booking via backend.');
             }
 
-            console.log("Booking successfully processed by backend. Booking ID:", data.bookingId);
-            setCurrentBooking({
-                ...bookingDataForBackend,
-                id: data.bookingId,
-                userName: currentUserName,
-                timestamp: new Date()
-            });
+            // Backend returns success and the actual booking ID (Firestore ID)
+            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: paymentStatus });
             setShowConfirmation(true);
 
             // Reset form fields and edit mode after successful operation
@@ -561,13 +462,14 @@ function BookingApp() {
             setSelectedPaymentMethod('cash');
 
         } catch (bookingError) {
-            console.error(`Error ${editingBookingId ? 'updating' : 'adding'} booking via backend:`, bookingError);
-            setError(`Failed to ${editingBookingId ? 'update' : 'book'} session: ${bookingError.message}`);
+            console.error('Error confirming booking via backend:', bookingError);
+            setError(`Failed to confirm session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
             setShowPaymentSimulationModal(false);
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, selectedPaymentMethod, editingBookingId, authInstance, BACKEND_API_BASE_URL]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, editingBookingId, authInstance, selectedPaymentMethod]);
+
 
     // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
@@ -578,9 +480,6 @@ function BookingApp() {
         setSelectedEquipment(booking.equipment || []);
         setSelectedPaymentMethod(booking.paymentMethod || 'cash');
         setError(null);
-        setConflictError(null); // Clear any conflict errors when starting edit
-        setConflictingSlots([]);
-        setShowConflictModal(false);
 
         if (bookingFormRef.current) {
             bookingFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -600,61 +499,18 @@ function BookingApp() {
         try {
             setError(null);
             setIsLoadingBookings(true);
-
-            // Fetch the very latest booking data from Firestore before attempting deletion
-            const bookingDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`, bookingToDelete.id);
-            const latestBookingSnap = await getDoc(bookingDocRef);
-            let calendarEventIdForDeletion = null;
-            if (latestBookingSnap.exists) {
-                const latestBookingData = latestBookingSnap.data();
-                calendarEventIdForDeletion = latestBookingData.calendarEventId;
-                console.log("Retrieved latest calendarEventId for deletion:", calendarEventIdForDeletion);
-            } else {
-                console.warn(`Booking ${bookingToDelete.id} not found in Firestore. Cannot get calendarEventId for deletion.`);
-            }
-
-            // First, attempt to delete from Google Calendar via backend
-            if (calendarEventIdForDeletion) {
-                try {
-                    const idToken = await authInstance.currentUser.getIdToken();
-                    const response = await fetch(`${BACKEND_API_BASE_URL}/api/cancel-calendar-event`, {
-                        method: 'DELETE',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${idToken}`
-                        },
-                        body: JSON.stringify({ calendarEventId: calendarEventIdForDeletion })
-                    });
-
-                    const data = await response.json();
-                    if (!response.ok) {
-                        // Even if calendar delete fails, try to delete from Firestore
-                        console.warn('Failed to delete calendar event, proceeding with Firestore delete:', data.error || 'Unknown error');
-                        setError(`Failed to remove from calendar: ${data.error || 'Unknown error'}. Deleting from app.`);
-                    } else {
-                        console.log("Calendar event deleted successfully via backend:", calendarEventIdForDeletion);
-                    }
-                } catch (calendarDeleteError) {
-                    console.warn('Network error or unexpected error during calendar delete via backend:', calendarDeleteError);
-                    setError(`Network error or unexpected calendar error: ${calendarDeleteError.message}. Deleting from app.`);
-                }
-            } else {
-                console.log("No calendarEventId found for booking or booking not found in Firestore, skipping calendar delete.");
-            }
-
-            // Always proceed to delete from Firestore
+            const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
             await deleteDoc(bookingDocRef);
-            console.log("Booking successfully deleted from Firestore:", bookingToDelete.id);
-            
+            console.log("Booking successfully deleted:", bookingToDelete.id);
         } catch (deleteError) {
-            console.error("Error deleting booking (Firestore or overall):", deleteError);
+            console.error("Error deleting booking:", deleteError);
             setError(`Failed to delete booking: ${deleteError.message}`);
         } finally {
             setIsLoadingBookings(false);
             setShowDeleteConfirmation(false);
             setBookingToDelete(null);
         }
-    }, [bookingToDelete, dbInstance, userId, authInstance, BACKEND_API_BASE_URL, APP_ID_FOR_FIRESTORE_PATH]);
+    }, [bookingToDelete, dbInstance, userId, APP_ID_FOR_FIRESTORE_PATH]);
 
 
     // Display loading state for authentication or if Firebase is not initialized, or if auth failed
@@ -758,15 +614,12 @@ function BookingApp() {
                                     className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
                                 >
                                     <option value="">Choose a time...</option>
-                                    {availableTimeSlotsForDisplay.map(slot => (
+                                    {timeSlots.map(slot => (
                                         <option key={slot.value} value={slot.value}>
                                             {slot.label}
                                         </option>
                                     ))}
                                 </select>
-                                {selectedDate && availableTimeSlotsForDisplay.length === 0 && (
-                                    <p className="text-red-300 text-sm mt-2">No available slots for this date with the selected duration.</p>
-                                )}
                             </div>
 
                             <div>
@@ -779,6 +632,7 @@ function BookingApp() {
                                     onChange={(e) => setDuration(parseInt(e.target.value))}
                                     className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
                                 >
+                                    <option value={1}>1 hour</option>
                                     <option value={2}>2 hours (Default)</option>
                                     <option value={3}>3 hours</option>
                                     <option value={4}>4 hours</option>
@@ -957,9 +811,9 @@ function BookingApp() {
                 <div className="text-center">
                     <button
                         onClick={handleBooking}
-                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId || availableTimeSlotsForDisplay.length === 0}
+                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId}
                         className={`px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
-                            (selectedDate && selectedTime && !isLoadingBookings && userId && availableTimeSlotsForDisplay.length > 0)
+                            selectedDate && selectedTime && !isLoadingBookings && userId
                                 ? 'bg-gradient-to-r from-orange-600 to-orange-800 text-white hover:from-orange-700 hover:to-orange-900 shadow-lg hover:shadow-xl transform hover:scale-105'
                                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
                         }`}
@@ -978,9 +832,6 @@ function BookingApp() {
                                 setSelectedEquipment([]);
                                 setSelectedPaymentMethod('cash');
                                 setError(null);
-                                setConflictError(null);
-                                setConflictingSlots([]);
-                                setShowConflictModal(false);
                             }}
                             className="ml-4 px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
                         >
@@ -1057,12 +908,9 @@ function BookingApp() {
                 )}
                 {/* Message if user is not logged in */}
                 {!userId && (
-                    <button
-                        onClick={() => setShowAuthModal(true)}
-                        className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition duration-200 shadow-lg mt-6 block mx-auto"
-                    >
-                        Sign In / Sign Up to View Bookings
-                    </button>
+                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
+                        Sign in to view and make bookings.
+                    </div>
                 )}
 
 
@@ -1088,7 +936,7 @@ function BookingApp() {
                                             {currentBooking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
                                         </span>
                                     </p>
-                                    <p className="mt-2"><strong>Booked By:</strong> <span className="font-semibold text-orange-200">{userName || (currentBooking.userId ? currentBooking.userId.substring(0, 8) + '...' : 'N/A')}</span></p> {/* Updated to show userName from state if available */}
+                                    <p className="mt-2"><strong>Booked By:</strong> <span className="font-semibold text-orange-200">{currentBooking.userName || 'N/A'}</span></p>
                                 </div>
                                 <button
                                     onClick={() => setShowConfirmation(false)}
@@ -1230,7 +1078,7 @@ function BookingApp() {
                             </p>
                             <div className="flex justify-center gap-4">
                                 <button
-                                    onClick={() => confirmBooking('paid')}
+                                    onClick={() => confirmBookingViaBackend('paid')} // Calls the backend function
                                     className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
                                 >
                                     Confirm Payment (Simulated)
@@ -1268,65 +1116,6 @@ function BookingApp() {
                                     className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
                                 >
                                     No, Keep Booking
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Conflict Modal */}
-                {showConflictModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <div className="text-center">
-                                <div className="text-6xl mb-4">⚠️</div>
-                                <h2 className="text-2xl font-bold text-red-400 mb-4">
-                                    Booking Conflict!
-                                </h2>
-                                {conflictError && (
-                                    <p className="text-gray-300 mb-4">{conflictError}</p>
-                                )}
-                                {conflictingSlots.length > 0 && (
-                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
-                                        <p className="font-semibold mb-2">Conflicting bookings:</p>
-                                        <ul className="list-disc list-inside space-y-1">
-                                            {conflictingSlots.map((slot, index) => (
-                                                <li key={index}>
-                                                    {formatTime(slot.time)} for {slot.duration} hours (by {slot.userName})
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                )}
-                                {availableTimeSlotsForDisplay.length > 0 && (
-                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
-                                        <p className="font-semibold mb-2">Available slots for {formatDate(selectedDate)} (Duration: {duration}h):</p>
-                                        <div className="flex flex-wrap gap-2 justify-center">
-                                            {availableTimeSlotsForDisplay.map(slot => (
-                                                <span 
-                                                    key={slot.value} 
-                                                    onClick={() => {
-                                                        setSelectedTime(slot.value);
-                                                        setShowConflictModal(false); // Close modal and re-attempt booking
-                                                        setConflictError(null);
-                                                        setConflictingSlots([]);
-                                                    }}
-                                                    className="bg-green-700 text-green-100 px-3 py-1 rounded-full text-sm cursor-pointer hover:bg-green-600 transition duration-200"
-                                                >
-                                                    {slot.label}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                {selectedDate && availableTimeSlotsForDisplay.length === 0 && (
-                                     <p className="text-orange-300 text-sm mt-2">No alternative available slots found for this date and duration.</p>
-                                )}
-                                <button
-                                    onClick={() => { setShowConflictModal(false); setConflictError(null); setConflictingSlots([]); }}
-                                    className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 transition duration-200"
-                                >
-                                    Close
                                 </button>
                             </div>
                         </div>
