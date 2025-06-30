@@ -62,6 +62,16 @@ async function initializeGoogleCalendar() {
 
     try {
         console.log('Attempting to create JWT client for Google Calendar...');
+        // --- ADDED DEBUG LOGGING HERE ---
+        console.log(`Debug: client_email defined: ${!!serviceAccount.client_email}`);
+        console.log(`Debug: private_key defined: ${!!serviceAccount.private_key}`);
+        console.log(`Debug: private_key length: ${serviceAccount.private_key ? serviceAccount.private_key.length : 'N/A'}`);
+        // Log a truncated version of the private key for inspection, but be mindful of exposing full key
+        if (serviceAccount.private_key) {
+            console.log(`Debug: private_key preview: ${serviceAccount.private_key.substring(0, 50)}...${serviceAccount.private_key.substring(serviceAccount.private_key.length - 50)}`);
+        }
+        // --- END DEBUG LOGGING ---
+
         const jwtClient = new google.auth.JWT(
             serviceAccount.client_email,
             null, // keyFile is null since we're using raw private_key
