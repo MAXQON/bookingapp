@@ -11,12 +11,12 @@ const { google } = require('googleapis'); // Import googleapis library
 
 // --- Firebase Admin SDK Initialization ---
 // Now expecting the Base64 encoded JSON string directly from the environment variable.
-const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64; // <--- Changed back to FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
+const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID;
 
 // Validate critical environment variables
-if (!encodedServiceAccountJson) { // <--- Checking for FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
+if (!encodedServiceAccountJson) {
     console.error('FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 not defined.');
     process.exit(1);
 }
@@ -47,30 +47,36 @@ try {
     process.exit(1);
 }
 
-// Initialize Google Calendar API client
-let calendar;
-try {
-    const jwtClient = new google.auth.JWT(
-        serviceAccount.client_email,
-        null,
-        serviceAccount.private_key,
-        ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
-    );
+// Initialize Google Calendar API client - Now uses an async approach
+let calendar = null; // Initialize to null
+// Wrap the calendar initialization in an immediately invoked async function (IIFE)
+// to ensure it waits for JWT client authorization.
+(async () => {
+    if (!googleCalendarId) {
+        console.warn('GOOGLE_CALENDAR_ID environment variable not set. Google Calendar integration will be skipped.');
+        return;
+    }
+    try {
+        const jwtClient = new google.auth.JWT(
+            serviceAccount.client_email,
+            null, // keyFile is null since we're using raw private_key
+            serviceAccount.private_key,
+            ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes
+        );
 
-    jwtClient.authorize((err, tokens) => {
-        if (err) {
-            console.error('Error authorizing JWT client for Google Calendar:', err);
-            return;
-        }
-        console.log('Google Calendar JWT client authorized.');
-    });
+        // Await authorization before proceeding
+        await jwtClient.authorize();
+        console.log('Google Calendar JWT client authorized successfully.');
 
-    calendar = google.calendar({ version: 'v3', auth: jwtClient });
-    console.log('Google Calendar API client initialized.');
-} catch (error) {
-    console.error('Error initializing Google Calendar API client:', error.message);
-    calendar = null; // Set to null if initialization fails
-}
+        // Only initialize 'calendar' after successful authorization
+        calendar = google.calendar({ version: 'v3', auth: jwtClient });
+        console.log('Google Calendar API client initialized and ready.');
+
+    } catch (error) {
+        console.error('Error during Google Calendar API authorization or initialization. Calendar functionality disabled:', error.message);
+        calendar = null; // Ensure calendar remains null if there's an error
+    }
+})();
 
 
 // Get references to Firestore and Auth services
@@ -209,6 +215,7 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         }
 
         // --- 2. Create/Update Google Calendar Event ---
+        // Ensure 'calendar' is not null before attempting to use it
         if (calendar && googleCalendarId) {
             const { date, time, duration } = bookingData;
             const startDate = new Date(`${date}T${time}:00`); // Parse date and time
