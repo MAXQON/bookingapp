@@ -8,35 +8,11 @@ const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
-const fs = require('fs'); // Import Node.js File System module
-const moment = require('moment-timezone'); // Import moment-timezone
-
-// --- Utility Functions (Copied from Frontend - REQUIRED for Backend Logic) ---
-/**
- * Calculates the end time given a start time and duration in hours.
- * This is needed for Google Calendar event creation.
- * @param {string} startTime - The start time string (e.g., '09:00').
- * @param {number} durationHours - The duration in hours.
- * @returns {string} The end time string (e.g., '11:00').
- */
-const getEndTime = (startTime, durationHours) => {
-    if (!startTime || isNaN(durationHours)) return '';
-    const [hour, minute] = startTime.split(':');
-    const start = new Date();
-    start.setHours(parseInt(hour), parseInt(minute), 0, 0);
-    start.setHours(start.getHours() + durationHours);
-    // Ensure the output format matches what's needed for the description
-    // For description, we need a 24-hour format (e.g., "11:00" or "14:00")
-    return `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
-};
 
 // --- Firebase Admin SDK Initialization ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID; // New: Get Google Calendar ID
-
-// New: Get the path to the Google Service Account key file from environment variable
-const googleAuthKeyFilePath = process.env.GOOGLE_AUTH_KEY_FILE_PATH;
 
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
@@ -51,24 +27,17 @@ if (!googleCalendarId) {
     console.error('FATAL ERROR: GOOGLE_CALENDAR_ID not defined. Calendar integration will not work.');
     // Do not exit, but log an error, as core app might still function without calendar.
 }
-if (!googleAuthKeyFilePath) {
-    console.error('FATAL ERROR: GOOGLE_AUTH_KEY_FILE_PATH not defined. Google Calendar integration will not work.');
-    process.exit(1); // Exit if critical path for Google Calendar is missing
-}
 
-let serviceAccount; // This will hold the parsed service account JSON object for Firebase Admin
-let firebaseAdminApp; // Hold the Firebase Admin App instance
+let serviceAccount;
 try {
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     serviceAccount = JSON.parse(decodedServiceAccountJson);
 
-    firebaseAdminApp = admin.initializeApp({
+    admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: `https://${projectId}.firebaseio.com`
-    }, 'mainAppInstance'); // Give it a name to prevent multiple initializations if hot-reloading
-    console.log('Firebase Admin SDK initialized successfully with name:', firebaseAdminApp.name);
-    console.log('Firebase Admin: Client Email from decoded JSON:', serviceAccount.client_email);
-
+    });
+    console.log('Firebase Admin SDK initialized successfully.');
 } catch (error) {
     console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK.', error.message);
     process.exit(1);
@@ -76,34 +45,33 @@ try {
 
 // Initialize Google Calendar API client
 let calendar;
-// Wrap the async initialization in an immediately invoked async function
-(async () => {
-    try {
-        console.log(`Google Calendar: Attempting to authorize using key file at: ${googleAuthKeyFilePath}`);
-        console.log('Current NODE_ENV:', process.env.NODE_ENV);
+try {
+    const jwtClient = new google.auth.JWT(
+        serviceAccount.client_email,
+        null,
+        serviceAccount.private_key,
+        ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
+    );
 
-        const authClient = new google.auth.GoogleAuth({
-            keyFile: googleAuthKeyFilePath,
-            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar']
-        });
+    jwtClient.authorize((err, tokens) => {
+        if (err) {
+            console.error('Error authorizing JWT client for Google Calendar:', err);
+            return;
+        }
+        console.log('Google Calendar JWT client authorized.');
+    });
 
-        const authorizedClient = await authClient.getClient();
-        
-        console.log('Google Calendar: Client Email (from key file):', authorizedClient.credentials.client_email);
-        console.log('Google Calendar: Private Key (from key file, first 50 chars):', authorizedClient.credentials.private_key ? authorizedClient.credentials.private_key.substring(0, 50) + '...' : 'NOT LOADED');
-        
-        calendar = google.calendar({ version: 'v3', auth: authorizedClient });
-        console.log('Google Calendar API client initialized successfully using key file.');
+    calendar = google.calendar({ version: 'v3', auth: jwtClient });
+    console.log('Google Calendar API client initialized.');
+} catch (error) {
+    console.error('Error initializing Google Calendar API client:', error.message);
+    calendar = null; // Set to null if initialization fails
+}
 
-    } catch (error) {
-        console.error('Error initializing Google Calendar API client:', error.message);
-        calendar = null;
-    }
-})();
 
 // Get references to Firestore and Auth services
-const db = firebaseAdminApp ? admin.firestore(firebaseAdminApp) : null;
-const auth = firebaseAdminApp ? admin.auth(firebaseAdminApp) : null;
+const db = admin.firestore();
+const auth = admin.auth();
 
 const APP_ID_FOR_FIRESTORE_PATH = process.env.APP_ID_FOR_FIRESTORE_PATH;
 if (!APP_ID_FOR_FIRESTORE_PATH) {
@@ -151,11 +119,6 @@ const verifyFirebaseToken = async (req, res, next) => {
     const idToken = authHeader.split('Bearer ')[1];
 
     try {
-        // Ensure auth is initialized before verifying token
-        if (!auth) {
-            console.error('Firebase Auth not initialized when trying to verify token.');
-            return res.status(500).json({ error: 'Server authentication service not ready.' });
-        }
         const decodedToken = await auth.verifyIdToken(idToken);
         req.uid = decodedToken.uid;
         req.user = decodedToken;
@@ -165,55 +128,6 @@ const verifyFirebaseToken = async (req, res, next) => {
         return res.status(403).json({ error: 'Unauthorized: Invalid token.', details: error.message });
     }
 };
-
-// --- Helper Function for Conflict Checking ---
-/**
- * Checks for overlapping bookings for a given date and time range.
- * This performs a collection group query for 'bookings' across all users.
- * @param {string} date - The date in YYYY-MM-DD format.
- * @param {string} time - The start time in HH:MM format.
- * @param {number} duration - The duration in hours.
- * @param {string} userTimeZone - The IANA timezone string (e.g., 'Asia/Makassar').
- * @param {string} [excludeBookingId=null] - Optional ID of a booking to exclude from conflict check (for edits).
- * @returns {Array} An array of conflicting booking data, or empty array if no conflicts.
- */
-const getConflictingBookings = async (date, time, duration, userTimeZone, excludeBookingId = null) => {
-    if (!db) {
-        throw new Error("Firestore DB is not initialized.");
-    }
-    try {
-        const proposedStart = moment.tz(`${date} ${time}`, userTimeZone);
-        const proposedEnd = proposedStart.clone().add(duration, 'hours');
-
-        const bookingsQuery = db.collectionGroup('bookings')
-            .where('date', '==', date)
-            .orderBy('date', 'asc')
-            .orderBy('time', 'asc');
-
-        const querySnapshot = await bookingsQuery.get();
-        const conflicting = [];
-
-        querySnapshot.forEach(docSnapshot => {
-            const booking = docSnapshot.data();
-            if (excludeBookingId && docSnapshot.id === excludeBookingId) {
-                return;
-            }
-
-            const existingStart = moment.tz(`${booking.date} ${booking.time}`, booking.userTimeZone || userTimeZone);
-            const existingEnd = existingStart.clone().add(booking.duration, 'hours');
-
-            if (proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart)) {
-                conflicting.push({ id: docSnapshot.id, ...booking });
-            }
-        });
-        return conflicting;
-    } catch (error) {
-        console.error('Error getting conflicting bookings:', error);
-        // Re-throw the original error to preserve Firestore details
-        throw error; 
-    }
-};
-
 
 // --- Routes ---
 app.get('/', (req, res) => {
@@ -226,12 +140,6 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 
     if (!displayName || typeof displayName !== 'string' || displayName.trim() === '') {
         return res.status(400).json({ error: 'Display name is required and must be a non-empty string.' });
-    }
-    if (!auth) {
-        return res.status(500).json({ error: 'Authentication service not initialized.' });
-    }
-    if (!db) {
-        return res.status(500).json({ error: 'Database service not initialized.' });
     }
 
     try {
@@ -253,8 +161,7 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 
 /**
  * POST /api/confirm-booking
- * Handles creating or updating a booking in Firestore and adding/updating an event to Google Calendar.
- * Includes conflict checking.
+ * Handles creating a booking in Firestore and adding an event to Google Calendar.
  * Requires an authenticated Firebase user and a valid ID Token.
  */
 app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
@@ -265,56 +172,19 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         return res.status(400).json({ error: 'Booking data is required.' });
     }
 
-    const { date, time, duration, userTimeZone } = bookingData;
-
-    if (!date || !time || isNaN(duration) || !userTimeZone) {
-        return res.status(400).json({ error: 'Date, time, duration, and userTimeZone are required booking data.' });
-    }
-    if (!db) {
-        return res.status(500).json({ error: 'Database service not initialized.' });
-    }
-
     try {
-        // --- CONFLICT CHECK ---
-        const conflictingBookings = await getConflictingBookings(date, time, duration, userTimeZone, editingBookingId);
-        if (conflictingBookings.length > 0) {
-            console.log(`Booking conflict detected for user ${uid}:`, conflictingBookings);
-            // Return 409 Conflict status
-            return res.status(409).json({
-                error: 'The selected time slot is already booked. Please choose another time.',
-                conflictingSlots: conflictingBookings.map(b => ({
-                    date: b.date,
-                    time: b.time,
-                    duration: b.duration,
-                    userName: b.userName
-                }))
-            });
-        }
-        // --- END CONFLICT CHECK ---
-
-
-        // --- 1. Determine Firestore Document Reference and existing calendarEventId ---
+        // --- 1. Save/Update Booking in Firestore ---
         const bookingsCollectionRef = db.collection(`artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${uid}/bookings`);
         let bookingDocRef;
-        let existingCalendarEventId = null;
-
         if (editingBookingId) {
             bookingDocRef = bookingsCollectionRef.doc(editingBookingId);
-            const existingBookingSnap = await bookingDocRef.get();
-            if (existingBookingSnap.exists) {
-                const existingBookingData = existingBookingSnap.data();
-                existingCalendarEventId = existingBookingData.calendarEventId || null;
-                console.log(`Editing booking ${editingBookingId}. Existing calendarEventId: ${existingCalendarEventId}`);
-            } else {
-                console.warn(`Attempted to edit booking ${editingBookingId} but it does not exist in Firestore. Creating as new.`);
-                bookingDocRef = await bookingsCollectionRef.add({
-                    ...bookingData,
-                    userId: uid,
-                    userName: userName,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp()
-                });
-                console.log(`Booking ${editingBookingId} not found, created as new with ID: ${bookingDocRef.id}`);
-            }
+            await bookingDocRef.set({
+                ...bookingData,
+                userId: uid,
+                userName: userName,
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            console.log(`Booking UPDATED in Firestore: ${editingBookingId}`);
         } else {
             bookingDocRef = await bookingsCollectionRef.add({
                 ...bookingData,
@@ -325,176 +195,70 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             console.log(`Booking ADDED to Firestore: ${bookingDocRef.id}`);
         }
 
-        // --- 2. Update Firestore Booking Data (after determining docRef) ---
-        await bookingDocRef.set({
-            ...bookingData,
-            userId: uid,
-            userName: userName,
-            timestamp: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        console.log(`Firestore booking ${bookingDocRef.id} updated/set.`);
-
-
-        // --- 3. Create/Update Google Calendar Event ---
-        let newOrUpdatedCalendarEventId = existingCalendarEventId; 
+        // --- 2. Create/Update Google Calendar Event ---
         if (calendar && googleCalendarId) {
-            try {
-                const startMoment = moment.tz(`${date} ${time}`, userTimeZone);
-                const endMoment = startMoment.clone().add(duration, 'hours');
+            const { date, time, duration } = bookingData;
+            const startDate = new Date(`${date}T${time}:00`); // Parse date and time
+            const endDate = new Date(startDate.getTime() + duration * 60 * 60 * 1000); // Add duration in hours
 
-                const eventResource = {
-                    summary: `DJ Studio Booking by ${userName}`,
-                    description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${endMoment.format('HH:mm')}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
-                    start: {
-                        dateTime: startMoment.toISOString(),
-                        timeZone: userTimeZone,
-                    },
-                    end: {
-                        dateTime: endMoment.toISOString(),
-                        timeZone: userTimeZone,
-                    },
-                    reminders: {
-                        useDefault: false,
-                        overrides: [
-                            { method: 'email', minutes: 24 * 60 },
-                            { method: 'popup', minutes: 10 },    
-                        ],
-                    },
-                };
+            const event = {
+                summary: `DJ Studio Booking by ${userName}`,
+                description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${getEndTime(time, duration)}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
+                start: {
+                    dateTime: startDate.toISOString(),
+                    timeZone: 'Asia/Makassar', // Assuming WITA timezone based on your context
+                },
+                end: {
+                    dateTime: endDate.toISOString(),
+                    timeZone: 'Asia/Makassar', // Assuming WITA timezone
+                },
+                // Optional: Add attendees, reminders, etc.
+                // attendees: [{ email: 'your_email@example.com' }], // Add your own email to receive invitations
+                reminders: {
+                    useDefault: false,
+                    overrides: [
+                        { method: 'email', minutes: 24 * 60 }, // 24 hours prior
+                        { method: 'popup', minutes: 10 },    // 10 minutes prior
+                    ],
+                },
+            };
 
-                let response;
-                if (existingCalendarEventId) {
-                    response = await calendar.events.update({
-                        calendarId: googleCalendarId,
-                        eventId: existingCalendarEventId,
-                        resource: eventResource,
-                        sendUpdates: 'all'
-                    });
-                    newOrUpdatedCalendarEventId = response.data.id;
-                    console.log('Calendar event UPDATED:', response.data.htmlLink, 'Event ID:', newOrUpdatedCalendarEventId);
-                } else {
-                    response = await calendar.events.insert({
-                        calendarId: googleCalendarId,
-                        resource: eventResource,
-                        sendUpdates: 'all'
-                    });
-                    newOrUpdatedCalendarEventId = response.data.id;
-                    console.log('Calendar event CREATED:', response.data.htmlLink, 'Event ID:', newOrUpdatedCalendarEventId);
-                }
+            // If it's an update, try to find and update existing event (requires storing eventId)
+            // For simplicity here, we'll always create a new one unless you add eventId to booking data
+            // Or, if editing, you could try to search for the event by title/description and update it.
+            // For this basic implementation, we'll add a new event or handle the case where we don't update directly.
+            // A more advanced solution would store the calendarEventId in Firestore with the booking.
 
-                await bookingDocRef.set({ calendarEventId: newOrUpdatedCalendarEventId }, { merge: true });
-                console.log(`Firestore booking ${bookingDocRef.id} updated with calendarEventId: ${newOrUpdatedCalendarEventId}`);
-
-            } catch (calendarError) {
-                console.error(`Error ${existingCalendarEventId ? 'updating' : 'creating'} Google Calendar event:`, calendarError.message);
-            }
+            const response = await calendar.events.insert({
+                calendarId: googleCalendarId,
+                resource: event,
+                sendUpdates: 'all' // 'all' sends email updates to attendees, 'none' does not
+            });
+            console.log('Calendar event created:', response.data.htmlLink);
+            // You might want to store response.data.id (calendarEventId) in your Firestore booking document
+            // for future updates or deletions of the calendar event.
 
         } else {
-            console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation/update.');
+            console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation.');
         }
 
         res.status(200).json({
             success: true,
-            message: editingBookingId ? 'Booking updated and calendar event (attempted)!' : 'Booking confirmed and calendar event (attempted)!',
-            bookingId: bookingDocRef.id,
-            calendarEventId: newOrUpdatedCalendarEventId 
+            message: editingBookingId ? 'Booking updated and calendar event added!' : 'Booking confirmed and calendar event added!',
+            bookingId: bookingDocRef.id
         });
 
     } catch (error) {
-        console.error('Error confirming booking or creating calendar event (Firestore/overall):', error);
-        // Re-throw the original error to preserve Firestore details
+        console.error('Error confirming booking or creating calendar event:', error);
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
-    }
-});
-
-/**
- * GET /api/check-booked-slots
- * Returns all currently booked time slots for a given date.
- * Query parameter: `date` (YYYY-MM-DD).
- * Requires authentication.
- */
-app.get('/api/check-booked-slots', verifyFirebaseToken, async (req, res) => {
-    const { date } = req.query; // Get date from query parameters
-
-    if (!date) {
-        return res.status(400).json({ error: 'Date query parameter is required (YYYY-MM-DD).' });
-    }
-    if (!db) {
-        return res.status(500).json({ error: 'Database service not initialized.' });
-    }
-
-    try {
-        const bookingsQuery = db.collectionGroup('bookings')
-            .where('date', '==', date)
-            .orderBy('date', 'asc')
-            .orderBy('time', 'asc');
-
-        const querySnapshot = await bookingsQuery.get();
-        const bookedSlots = [];
-
-        querySnapshot.forEach(docSnapshot => {
-            const booking = docSnapshot.data();
-            bookedSlots.push({
-                id: docSnapshot.id,
-                date: booking.date,
-                time: booking.time,
-                duration: booking.duration,
-                userName: booking.userName || 'Unknown User',
-                userTimeZone: booking.userTimeZone || 'Asia/Jakarta' // Ensure userTimeZone is present for frontend calculations
-            });
-        });
-
-        res.status(200).json({ bookedSlots: bookedSlots });
-
-    } catch (error) {
-        console.error('Error fetching booked slots:', error);
-        // Re-throw the original error to preserve Firestore details
-        return res.status(500).json({ error: 'Failed to fetch booked slots.', details: error.message });
-    }
-});
-
-
-/**
- * DELETE /api/cancel-calendar-event
- * Handles deleting an event from Google Calendar.
- * Requires an authenticated Firebase user and a valid ID Token.
- */
-app.delete('/api/cancel-calendar-event', verifyFirebaseToken, async (req, res) => {
-    const { calendarEventId } = req.body;
-
-    if (!calendarEventId) {
-        return res.status(400).json({ error: 'Calendar event ID is required.' });
-    }
-
-    if (!calendar || !googleCalendarId) {
-        console.warn('Google Calendar API not initialized or calendar ID not set. Cannot delete event.');
-        return res.status(500).json({ error: 'Backend calendar service not ready.' });
-    }
-
-    try {
-        await calendar.events.delete({
-            calendarId: googleCalendarId,
-            eventId: calendarEventId
-        });
-        console.log(`Google Calendar event ${calendarEventId} deleted successfully.`);
-        res.status(200).json({ success: true, message: 'Calendar event deleted successfully.' });
-    } catch (error) {
-        console.error(`Error deleting Google Calendar event ${calendarEventId}:`, error.message);
-        return res.status(500).json({ error: 'Failed to delete calendar event.', details: error.message });
     }
 });
 
 
 // Start the server
-// Added a small delay to ensure Firebase Admin SDK is fully initialized before the server starts listening.
-// This is a diagnostic step to rule out timing issues.
-setTimeout(() => {
-    app.listen(port, () => {
-        console.log(`Standalone backend listening on port ${port}`);
-        console.log(`Access at: http://localhost:${port}`);
-        console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
-        console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
-        console.log(`Cancel calendar event endpoint: http://localhost:${port}/api/cancel-calendar-event`);
-        console.log(`Check booked slots endpoint: http://localhost:${port}/api/check-booked-slots`);
-    });
-}, 5000); // 5-second delay to allow SDK initialization
+app.listen(port, () => {
+    console.log(`Standalone backend listening on port ${port}`);
+    console.log(`Access at: http://localhost:${port}`);
+    console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
+    console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
+});
