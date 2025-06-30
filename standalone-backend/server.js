@@ -8,16 +8,13 @@ const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
-// No longer need fs directly for GoogleAuth's keyFile option
+// No longer need fs directly as we're not using keyFile for Calendar right now
 // const fs = require('fs');
 
-// --- Firebase Admin SDK Initialization (still uses Base64 for Firestore Admin) ---
+// --- Environment Variables ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
-const projectId = process.env.FIREBASE_PROJECT_ID;
+const projectId = process.env.FIREBASE_PROJECT_ID; // Used for Firebase Admin SDK databaseURL
 const googleCalendarId = process.env.GOOGLE_CALENDAR_ID;
-
-// Path to the Google Calendar service account key file (from Render Secret Files)
-const googleAuthKeyFilePath = process.env.GOOGLE_AUTH_KEY_FILE_PATH;
 
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
@@ -28,69 +25,86 @@ if (!projectId) {
     console.error('FATAL ERROR: FIREBASE_PROJECT_ID not defined.');
     process.exit(1);
 }
-// GOOGLE_CALENDAR_ID is checked below in initializeGoogleCalendar, not fatal here.
 
-let serviceAccount; // This will hold the parsed service account for Firebase Admin
+let serviceAccount; // This will hold the parsed service account for Firebase Admin and Calendar
 try {
     // Decode the Base64 string back to its original JSON string format
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
     // Parse the JSON string into an object
     serviceAccount = JSON.parse(decodedServiceAccountJson);
-    console.log('Service account JSON decoded and parsed successfully from FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 for Firebase Admin SDK.');
+    console.log('Service account JSON decoded and parsed successfully from FIREBASE_SERVICE_ACCOUNT_KEY_BASE64.');
 
-    // Initialize Firebase Admin SDK with the parsed service account object
+    // --- ENHANCED DEBUGGING FOR FIREBASE ADMIN SDK SERVICE ACCOUNT ---
+    console.log('Debug: Firebase Admin SDK Service Account Details:');
+    console.log(`  Project ID: ${serviceAccount.project_id}`);
+    console.log(`  Client Email: ${serviceAccount.client_email}`);
+    if (serviceAccount.private_key) {
+        console.log(`  Private Key Length: ${serviceAccount.private_key.length}`);
+        console.log(`  Private Key Preview (first 50): ${serviceAccount.private_key.substring(0, 50)}...`);
+        console.log(`  Private Key Preview (last 50): ...${serviceAccount.private_key.substring(serviceAccount.private_key.length - 50)}`);
+    } else {
+        console.log('  Private Key: NOT FOUND IN PARSED JSON!');
+    }
+    // --- END ENHANCED DEBUGGING ---
+
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        databaseURL: `https://${projectId}.firebaseio.com`
+        databaseURL: `https://${projectId}.firebaseio.com` // Ensure this matches your project ID
     });
     console.log('Firebase Admin SDK initialized successfully.');
 } catch (error) {
-    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value or format.', error.message);
+    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value, format, or project ID in JSON.', error.message);
+    console.error('Full Firebase Admin SDK Init Error:', error);
     process.exit(1);
 }
 
-// Initialize Google Calendar API client - Now a named async function
+// Initialize Google Calendar API client
 let calendar = null; // Initialize to null
 
-// Define the async function for Google Calendar initialization
 async function initializeGoogleCalendar() {
     if (!googleCalendarId) {
         console.warn('GOOGLE_CALENDAR_ID environment variable not set. Google Calendar integration will be skipped.');
         return;
     }
-    if (!googleAuthKeyFilePath) {
-        console.error('ERROR: GOOGLE_AUTH_KEY_FILE_PATH environment variable not set. Cannot initialize Google Calendar from file.');
+    // Explicit checks for serviceAccount properties before use
+    if (!serviceAccount || !serviceAccount.client_email || !serviceAccount.private_key) {
+        console.error('ERROR: Missing client_email or private_key in serviceAccount object for Calendar. Cannot initialize Google Calendar.');
         calendar = null;
         return;
     }
 
     try {
-        console.log(`Attempting to initialize GoogleAuth with keyFile: ${googleAuthKeyFilePath}`);
+        console.log('Attempting to create JWT client for Google Calendar...');
+        
+        // Robust normalization of the private_key before passing to JWT client
+        let privateKeyForCalendar = serviceAccount.private_key;
+        if (privateKeyForCalendar) {
+            privateKeyForCalendar = privateKeyForCalendar
+                .replace(/-----BEGIN PRIVATE KEY-----/, '')
+                .replace(/-----END PRIVATE KEY-----/, '')
+                .replace(/\s+/g, '') // Remove all whitespace (spaces, tabs, newlines)
+                .trim();
+            privateKeyForCalendar = `-----BEGIN PRIVATE KEY-----\n${privateKeyForCalendar}\n-----END PRIVATE KEY-----\n`;
+            console.log('Google Calendar private key string normalized.');
+        }
 
-        // Use google.auth.GoogleAuth to handle service account key file authentication
-        const authClient = new google.auth.GoogleAuth({
-            keyFile: googleAuthKeyFilePath, // Path to the service account JSON key file
-            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
-        });
+        const jwtClient = new google.auth.JWT(
+            serviceAccount.client_email,
+            null, // keyFile is null since we're using raw private_key
+            privateKeyForCalendar, // Use the normalized private key
+            ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes
+        );
 
-        // Get the authorized client, which handles token acquisition
-        const auth = await authClient.getClient();
-        console.log('Google Calendar GoogleAuth client authorized successfully using key file.');
+        await jwtClient.authorize();
+        console.log('Google Calendar JWT client authorized successfully.');
 
-        // Initialize 'calendar' with the obtained authorized client
-        calendar = google.calendar({ version: 'v3', auth: auth });
+        calendar = google.calendar({ version: 'v3', auth: jwtClient });
         console.log('Google Calendar API client initialized and ready.');
 
     } catch (error) {
-        console.error('Error during Google Calendar API authorization or initialization using key file. Calendar functionality disabled:', error.message);
-        // Provide specific messages for common file-based errors
-        if (error.code === 'ENOENT') {
-            console.error(`ERROR: Key file not found at ${googleAuthKeyFilePath}. Make sure it's correctly mounted in Render Secret Files.`);
-        } else {
-             // For other errors, log the full error object to get more details
-            console.error('Full Google API Auth Error:', error);
-        }
-        calendar = null; // Ensure calendar remains null if there's an error
+        console.error('Error during Google Calendar API authorization or initialization. Calendar functionality disabled:', error.message);
+        console.error('Full Google Calendar Auth Error:', error);
+        calendar = null;
     }
 }
 
@@ -160,6 +174,11 @@ const verifyFirebaseToken = async (req, res, next) => {
         next();
     } catch (error) {
         console.error('Error verifying Firebase ID token:', error.message);
+        // Special handling for UNAUTHENTICATED errors from Firebase Admin
+        if (error.code === 'auth/argument-error' && error.message.includes('UNAUTHENTICATED')) {
+            console.error('Firebase Admin SDK itself is reporting UNAUTHENTICATED when verifying token. This often means its own credentials are invalid.');
+            return res.status(500).json({ error: 'Backend authentication service issue. Please check server logs.', details: error.message });
+        }
         return res.status(403).json({ error: 'Unauthorized: Invalid token.', details: error.message });
     }
 };
@@ -206,6 +225,11 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
         console.error('Error updating user profile:', error);
         if (error.code === 'auth/user-not-found') {
             return res.status(404).json({ error: 'User not found for profile update.' });
+        }
+        // Catch specific Firestore UNAUTHENTICATED error
+        if (error.code === 16 && error.details && error.details.includes('UNAUTHENTICATED')) {
+             console.error('Firestore UNAUTHENTICATED error. Check Firebase Admin SDK credentials and permissions.');
+             return res.status(500).json({ error: 'Backend Firestore authentication failed. Please check server credentials/permissions.' });
         }
         return res.status(500).json({ error: 'Failed to update user profile due to a server error.', details: error.message });
     }
@@ -293,6 +317,11 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error confirming booking or creating calendar event:', error);
+        // Catch specific Firestore UNAUTHENTICATED error
+        if (error.code === 16 && error.details && error.details.includes('UNAUTHENTICATED')) {
+             console.error('Firestore UNAUTHENTICATED error. Check Firebase Admin SDK credentials and permissions.');
+             return res.status(500).json({ error: 'Backend Firestore authentication failed. Please check server credentials/permissions.' });
+        }
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
     }
 });
