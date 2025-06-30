@@ -12,6 +12,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import datetime
 import pytz
+import base64 # Import the base64 module
 
 # Initialize Flask App
 app = Flask(__name__)
@@ -24,7 +25,11 @@ firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_K
 
 if firebase_service_account_key_base64:
     try:
-        service_account_info_str = firebase_service_account_key_base64.encode('utf-8').decode('base64')
+        # Corrected base64 decoding:
+        # 1. Encode the string to bytes (e.g., utf-8)
+        # 2. Decode from base64
+        # 3. Decode the resulting bytes back to a UTF-8 string
+        service_account_info_str = base64.b64decode(firebase_service_account_key_base64).decode('utf-8')
         service_account_info = json.loads(service_account_info_str)
         
         print("Service account JSON decoded and parsed successfully from FIREBASE_SERVICE_ACCOUNT_KEY_BASE64.")
@@ -51,6 +56,15 @@ GOOGLE_CALENDAR_REFRESH_TOKEN = os.environ.get('GOOGLE_CALENDAR_REFRESH_TOKEN')
 GOOGLE_CALENDAR_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_CALENDAR_ID')
 
 calendar_service = None
+
+# Print the values of Google Calendar env vars for debugging
+print("\n--- Google Calendar Environment Variables Check ---")
+print(f"GOOGLE_CALENDAR_CLIENT_ID: {'SET' if GOOGLE_CALENDAR_CLIENT_ID else 'NOT SET'}")
+print(f"GOOGLE_CALENDAR_CLIENT_SECRET: {'SET' if GOOGLE_CALENDAR_CLIENT_SECRET else 'NOT SET'}")
+print(f"GOOGLE_CALENDAR_REFRESH_TOKEN: {'SET' if GOOGLE_CALENDAR_REFRESH_TOKEN else 'NOT SET'}")
+print(f"GOOGLE_CALENDAR_CALENDAR_ID: {'SET' if GOOGLE_CALENDAR_CALENDAR_ID else 'NOT SET'}")
+print("--------------------------------------------------\n")
+
 
 if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALENDAR_REFRESH_TOKEN:
     try:
@@ -170,7 +184,6 @@ def confirm_booking():
 
         calendar_event_id = None
         
-        # --- START ENHANCED CALENDAR LOGGING/DEBUGGING ---
         print(f"\nAttempting Google Calendar Integration for booking {editing_booking_id if editing_booking_id else 'NEW'}.")
         print(f"Calendar service initialized: {calendar_service is not None}")
         print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
@@ -266,12 +279,11 @@ def confirm_booking():
             except Exception as e:
                 print(f"CRITICAL ERROR during Google Calendar API interaction: {e}")
                 import traceback
-                traceback.print_exc() # Print full traceback for calendar errors
+                traceback.print_exc()
                 firestore_data['calendarSyncStatus'] = 'failed'
                 firestore_data['calendarSyncError'] = str(e)
         else:
             print("Google Calendar API client or calendar ID is not ready. Skipping calendar event creation.")
-        # --- END ENHANCED CALENDAR LOGGING/DEBUGGING ---
 
 
         if editing_booking_id:
@@ -289,7 +301,7 @@ def confirm_booking():
     except Exception as e:
         print(f"Overall error confirming booking or calling calendar backend: {e}")
         import traceback
-        traceback.print_exc() # Print full traceback for overall errors
+        traceback.print_exc()
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
 
 @app.route('/api/cancel-calendar-event', methods=['DELETE'], endpoint='cancel_calendar_event')
@@ -303,7 +315,6 @@ def cancel_calendar_event():
     if not calendar_event_id:
         return jsonify({"error": "Bad Request", "message": "Calendar event ID is required."}), 400
 
-    # --- START ENHANCED CALENDAR LOGGING/DEBUGGING ---
     print(f"\nAttempting to DELETE Google Calendar Event with ID: {calendar_event_id}")
     print(f"Calendar service initialized: {calendar_service is not None}")
     print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
@@ -322,10 +333,8 @@ def cancel_calendar_event():
     except Exception as e:
         print(f"CRITICAL ERROR deleting Google Calendar event {calendar_event_id}: {e}")
         import traceback
-        traceback.print_exc() # Print full traceback for calendar errors
+        traceback.print_exc()
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
-# --- END ENHANCED CALENDAR LOGGING/DEBUGGING ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
