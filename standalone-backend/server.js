@@ -24,10 +24,7 @@ if (!projectId) {
     console.error('FATAL ERROR: FIREBASE_PROJECT_ID not defined.');
     process.exit(1);
 }
-if (!googleCalendarId) {
-    console.error('FATAL ERROR: GOOGLE_CALENDAR_ID not defined. Calendar integration will not work.');
-    // Do not exit, but log an error, as core app might still function without calendar.
-}
+// GOOGLE_CALENDAR_ID is checked below in initializeGoogleCalendar, not fatal here.
 
 let serviceAccount;
 try {
@@ -47,16 +44,24 @@ try {
     process.exit(1);
 }
 
-// Initialize Google Calendar API client - Now uses an async approach
+// Initialize Google Calendar API client - Now a named async function
 let calendar = null; // Initialize to null
-// Wrap the calendar initialization in an immediately invoked async function (IIFE)
-// to ensure it waits for JWT client authorization.
-(async () => {
+
+// Define the async function for Google Calendar initialization
+async function initializeGoogleCalendar() {
     if (!googleCalendarId) {
         console.warn('GOOGLE_CALENDAR_ID environment variable not set. Google Calendar integration will be skipped.');
         return;
     }
+    // Explicit checks for serviceAccount properties before use
+    if (!serviceAccount || !serviceAccount.client_email || !serviceAccount.private_key) {
+        console.error('ERROR: Missing client_email or private_key in serviceAccount object. Cannot initialize Google Calendar.');
+        calendar = null;
+        return;
+    }
+
     try {
+        console.log('Attempting to create JWT client for Google Calendar...');
         const jwtClient = new google.auth.JWT(
             serviceAccount.client_email,
             null, // keyFile is null since we're using raw private_key
@@ -76,7 +81,10 @@ let calendar = null; // Initialize to null
         console.error('Error during Google Calendar API authorization or initialization. Calendar functionality disabled:', error.message);
         calendar = null; // Ensure calendar remains null if there's an error
     }
-})();
+}
+
+// Call the Google Calendar initialization function after Firebase Admin SDK is initialized
+initializeGoogleCalendar();
 
 
 // Get references to Firestore and Auth services
