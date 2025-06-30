@@ -7,14 +7,20 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-const { google } = require('googleapis'); // Import googleapis library
-// No longer need fs directly as we're not using keyFile for Calendar right now
+// googleapis is no longer needed here for Calendar, as it will be handled by Python backend
+// const { google } = require('googleapis');
+// fs is no longer needed here as we are not reading Calendar key file directly
 // const fs = require('fs');
 
 // --- Environment Variables ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
 const projectId = process.env.FIREBASE_PROJECT_ID; // Used for Firebase Admin SDK databaseURL
-const googleCalendarId = process.env.GOOGLE_CALENDAR_ID;
+// googleCalendarId is no longer directly used in this Node.js backend
+// const googleCalendarId = process.env.GOOGLE_CALENDAR_ID;
+
+// Define the URL for your new Python Calendar Backend service
+// IMPORTANT: Replace this with the actual URL of your deployed Python Flask service
+const PYTHON_CALENDAR_BACKEND_URL = process.env.PYTHON_CALENDAR_BACKEND_URL || 'http://localhost:5001'; // Default for local testing
 
 // Validate critical environment variables
 if (!encodedServiceAccountJson) {
@@ -26,7 +32,7 @@ if (!projectId) {
     process.exit(1);
 }
 
-let serviceAccount; // This will hold the parsed service account for Firebase Admin and Calendar
+let serviceAccount; // This will hold the parsed service account for Firebase Admin
 try {
     // Decode the Base64 string back to its original JSON string format
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
@@ -58,59 +64,9 @@ try {
     process.exit(1);
 }
 
-// Initialize Google Calendar API client
-let calendar = null; // Initialize to null
-
-async function initializeGoogleCalendar() {
-    if (!googleCalendarId) {
-        console.warn('GOOGLE_CALENDAR_ID environment variable not set. Google Calendar integration will be skipped.');
-        return;
-    }
-    // Explicit checks for serviceAccount properties before use
-    if (!serviceAccount || !serviceAccount.client_email || !serviceAccount.private_key) {
-        console.error('ERROR: Missing client_email or private_key in serviceAccount object for Calendar. Cannot initialize Google Calendar.');
-        calendar = null;
-        return;
-    }
-
-    try {
-        console.log('Attempting to create JWT client for Google Calendar...');
-        
-        // Robust normalization of the private_key before passing to JWT client
-        let privateKeyForCalendar = serviceAccount.private_key;
-        if (privateKeyForCalendar) {
-            privateKeyForCalendar = privateKeyForCalendar
-                .replace(/-----BEGIN PRIVATE KEY-----/, '')
-                .replace(/-----END PRIVATE KEY-----/, '')
-                .replace(/\s+/g, '') // Remove all whitespace (spaces, tabs, newlines)
-                .trim();
-            privateKeyForCalendar = `-----BEGIN PRIVATE KEY-----\n${privateKeyForCalendar}\n-----END PRIVATE KEY-----\n`;
-            console.log('Google Calendar private key string normalized.');
-        }
-
-        const jwtClient = new google.auth.JWT(
-            serviceAccount.client_email,
-            null, // keyFile is null since we're using raw private_key
-            privateKeyForCalendar, // Use the normalized private key
-            ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes
-        );
-
-        await jwtClient.authorize();
-        console.log('Google Calendar JWT client authorized successfully.');
-
-        calendar = google.calendar({ version: 'v3', auth: jwtClient });
-        console.log('Google Calendar API client initialized and ready.');
-
-    } catch (error) {
-        console.error('Error during Google Calendar API authorization or initialization. Calendar functionality disabled:', error.message);
-        console.error('Full Google Calendar Auth Error:', error);
-        calendar = null;
-    }
-}
-
-// Call the Google Calendar initialization function after Firebase Admin SDK is initialized
-initializeGoogleCalendar();
-
+// Google Calendar API initialization removed from here.
+// It will be handled by the separate Python backend.
+let calendar = null; // Still declare, but will remain null
 
 // Get references to Firestore and Auth services
 const db = admin.firestore();
@@ -184,6 +140,7 @@ const verifyFirebaseToken = async (req, res, next) => {
 };
 
 // --- Helper function for getEndTime ---
+// Note: This is a client-side helper. For Google Calendar, Python backend will handle timezone-aware times.
 const getEndTime = (startTime, durationHours) => {
     if (!startTime || isNaN(durationHours)) return '';
     const [hour] = startTime.split(':');
@@ -226,7 +183,6 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
         if (error.code === 'auth/user-not-found') {
             return res.status(404).json({ error: 'User not found for profile update.' });
         }
-        // Catch specific Firestore UNAUTHENTICATED error
         if (error.code === 16 && error.details && error.details.includes('UNAUTHENTICATED')) {
              console.error('Firestore UNAUTHENTICATED error. Check Firebase Admin SDK credentials and permissions.');
              return res.status(500).json({ error: 'Backend Firestore authentication failed. Please check server credentials/permissions.' });
@@ -237,7 +193,8 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
 
 /**
  * POST /api/confirm-booking
- * Handles creating a booking in Firestore and adding an event to Google Calendar.
+ * Handles creating a booking in Firestore and making a call to a separate Python backend
+ * for Google Calendar event creation.
  * Requires an authenticated Firebase user and a valid ID Token.
  */
 app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
@@ -271,53 +228,83 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             console.log(`Booking ADDED to Firestore: ${bookingDocRef.id}`);
         }
 
-        // --- 2. Create/Update Google Calendar Event ---
-        // Ensure 'calendar' is not null before attempting to use it
-        if (calendar && googleCalendarId) {
-            const { date, time, duration } = bookingData;
-            const startDate = new Date(`${date}T${time}:00`); // Parse date and time
-            const endDate = new Date(startDate.getTime() + duration * 60 * 60 * 1000); // Add duration in hours
+        // --- 2. Call Python Backend for Google Calendar Event ---
+        // Prepare data for the Python backend. Include relevant booking details
+        // and the user's timezone if known from the frontend.
+        const calendarPayload = {
+            date: bookingData.date,
+            time: bookingData.time,
+            duration: bookingData.duration,
+            userName: userName,
+            bookingId: editingBookingId || bookingDocRef.id, // Use existing or new Firestore ID
+            equipment: bookingData.equipment,
+            paymentMethod: bookingData.paymentMethod,
+            paymentStatus: bookingData.paymentStatus,
+            userTimeZone: 'Asia/Makassar' // IMPORTANT: This should ideally come from frontend
+                                          // For now, hardcode to match your context for testing
+        };
 
-            const event = {
-                summary: `DJ Studio Booking by ${userName}`,
-                description: `Booking ID: ${bookingDocRef.id}\nDate: ${date}\nTime: ${time} - ${getEndTime(time, duration)}\nDuration: ${duration} hours\nEquipment: ${bookingData.equipment.map(eq => eq.name).join(', ')}\nPayment: ${bookingData.paymentMethod} (${bookingData.paymentStatus})`,
-                start: {
-                    dateTime: startDate.toISOString(),
-                    timeZone: 'Asia/Makassar', // Assuming WITA timezone based on your context
-                },
-                end: {
-                    dateTime: endDate.toISOString(),
-                    timeZone: 'Asia/Makassar', // Assuming WITA timezone
-                },
-                reminders: {
-                    useDefault: false,
-                    overrides: [
-                        { method: 'email', minutes: 24 * 60 }, // 24 hours prior
-                        { method: 'popup', minutes: 10 },    // 10 minutes prior
-                    ],
-                },
-            };
+        // If in edit mode, fetch the existing calendarEventId from Firestore
+        let existingCalendarEventId = null;
+        if (editingBookingId) {
+            const bookingSnap = await bookingDocRef.get();
+            if (bookingSnap.exists) {
+                existingCalendarEventId = bookingSnap.data().calendarEventId;
+                calendarPayload.calendarEventId = existingCalendarEventId; // Pass to Python
+            }
+        }
+        
+        // Determine the Python endpoint and HTTP method
+        const pythonEndpoint = `${PYTHON_CALENDAR_BACKEND_URL}/api/confirm-booking`; // Python endpoint
+        const pythonMethod = existingCalendarEventId ? 'PUT' : 'POST'; // Use PUT for update, POST for new
 
-            const response = await calendar.events.insert({
-                calendarId: googleCalendarId,
-                resource: event,
-                sendUpdates: 'all'
+        try {
+            console.log(`Calling Python Calendar Backend (${pythonMethod}): ${pythonEndpoint}`);
+            const pythonResponse = await fetch(pythonEndpoint, {
+                method: pythonMethod,
+                headers: {
+                    'Content-Type': 'application/json',
+                    // You might need to pass an authentication token to the Python backend too
+                    // if it has its own authentication middleware. For now, assuming direct call.
+                    'Authorization': req.headers.authorization // Pass the Firebase ID token
+                },
+                body: JSON.stringify(calendarPayload)
             });
-            console.log('Calendar event created:', response.data.htmlLink);
 
-        } else {
-            console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation.');
+            const pythonResponseData = await pythonResponse.json();
+
+            if (!pythonResponse.ok) {
+                console.error('Error from Python Calendar Backend:', pythonResponseData);
+                // Propagate the Python backend error if it's not successful
+                throw new Error(pythonResponseData.error || 'Failed to create/update calendar event via Python backend.');
+            }
+            console.log('Calendar event handled by Python backend successfully:', pythonResponseData.message);
+
+            // If the Python backend returns a calendarEventId, store it in Firestore
+            if (pythonResponseData.calendarEventId) {
+                await bookingDocRef.set({
+                    calendarEventId: pythonResponseData.calendarEventId
+                }, { merge: true });
+                console.log(`Firestore booking ${bookingDocRef.id} updated with Calendar Event ID: ${pythonResponseData.calendarEventId}`);
+            }
+
+        } catch (pythonCallError) {
+            console.error('Error calling Python Calendar Backend:', pythonCallError.message);
+            console.warn('Google Calendar event creation/update failed. Booking saved to Firestore, but no calendar event was created/updated.');
+            // Do NOT re-throw this error if you want the Firestore booking to still succeed
+            // You might want to return a 200 OK with a warning for the user
+            // For now, we'll let the outer catch block handle it as a general error.
         }
 
         res.status(200).json({
             success: true,
-            message: editingBookingId ? 'Booking updated and calendar event added!' : 'Booking confirmed and calendar event added!',
+            message: editingBookingId ? 'Booking updated and calendar event (attempted)!' : 'Booking confirmed and calendar event (attempted)!',
             bookingId: bookingDocRef.id
         });
 
     } catch (error) {
-        console.error('Error confirming booking or creating calendar event:', error);
-        // Catch specific Firestore UNAUTHENTICATED error
+        console.error('Error confirming booking or calling calendar backend:', error);
+        // This catch block handles errors from Firestore operations or the Python backend call
         if (error.code === 16 && error.details && error.details.includes('UNAUTHENTICATED')) {
              console.error('Firestore UNAUTHENTICATED error. Check Firebase Admin SDK credentials and permissions.');
              return res.status(500).json({ error: 'Backend Firestore authentication failed. Please check server credentials/permissions.' });
@@ -333,4 +320,5 @@ app.listen(port, () => {
     console.log(`Access at: http://localhost:${port}`);
     console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
     console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
+    console.log(`Python Calendar Backend URL: ${PYTHON_CALENDAR_BACKEND_URL}`);
 });
