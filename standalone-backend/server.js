@@ -8,7 +8,8 @@ const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
-const fs = require('fs'); // Node.js File System module for reading files
+// No longer need fs directly for GoogleAuth's keyFile option
+// const fs = require('fs');
 
 // --- Firebase Admin SDK Initialization (still uses Base64 for Firestore Admin) ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
@@ -64,72 +65,31 @@ async function initializeGoogleCalendar() {
     }
 
     try {
-        console.log(`Attempting to read Google Calendar key file from: ${googleAuthKeyFilePath}`);
+        console.log(`Attempting to initialize GoogleAuth with keyFile: ${googleAuthKeyFilePath}`);
 
-        // Explicitly read and parse the key file content
-        let keyFileContent;
-        try {
-            keyFileContent = fs.readFileSync(googleAuthKeyFilePath, 'utf8');
-            console.log('Google Calendar key file read successfully.');
-        } catch (readError) {
-            if (readError.code === 'ENOENT') {
-                throw new Error(`Key file not found at ${googleAuthKeyFilePath}. Make sure it's correctly mounted in Render Secret Files.`);
-            } else {
-                throw new Error(`Failed to read key file at ${googleAuthKeyFilePath}: ${readError.message}`);
-            }
-        }
+        // Use google.auth.GoogleAuth to handle service account key file authentication
+        const authClient = new google.auth.GoogleAuth({
+            keyFile: googleAuthKeyFilePath, // Path to the service account JSON key file
+            scopes: ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes for calendar access
+        });
 
-        let keyFileServiceAccount;
-        try {
-            keyFileServiceAccount = JSON.parse(keyFileContent);
-            console.log('Google Calendar key file JSON parsed successfully.');
-        } catch (parseError) {
-            throw new Error(`Failed to parse JSON from key file at ${googleAuthKeyFilePath}. Check file content format: ${parseError.message}`);
-        }
+        // Get the authorized client, which handles token acquisition
+        const auth = await authClient.getClient();
+        console.log('Google Calendar GoogleAuth client authorized successfully using key file.');
 
-        // --- Debugging logs for the parsed key file content ---
-        console.log(`Debug (Calendar Key File): client_email defined: ${!!keyFileServiceAccount.client_email}`);
-        console.log(`Debug (Calendar Key File): private_key defined: ${!!keyFileServiceAccount.private_key}`);
-        console.log(`Debug (Calendar Key File): private_key length: ${keyFileServiceAccount.private_key ? keyFileServiceAccount.private_key.length : 'N/A'}`);
-        if (keyFileServiceAccount.private_key) {
-            console.log(`Debug (Calendar Key File): private_key preview (first 50): ${keyFileServiceAccount.private_key.substring(0, 50)}`);
-            console.log(`Debug (Calendar Key File): private_key preview (last 50): ${keyFileServiceAccount.private_key.substring(keyFileServiceAccount.private_key.length - 50)}`);
-            console.log(`Debug (Calendar Key File): private_key char at 32: '${keyFileServiceAccount.private_key.charAt(32)}' (should be '\\n')`);
-            console.log(`Debug (Calendar Key File): private_key char at length-32: '${keyFileServiceAccount.private_key.charAt(keyFileServiceAccount.private_key.length - 32)}' (should be '\\n')`);
-        }
-        // --- End Debugging logs ---
-
-        // Robust normalization for the private_key from the file
-        if (keyFileServiceAccount.private_key) {
-            let cleanedPrivateKey = keyFileServiceAccount.private_key
-                .replace(/-----BEGIN PRIVATE KEY-----/, '')
-                .replace(/-----END PRIVATE KEY-----/, '')
-                .replace(/\s+/g, '') // Remove all whitespace (spaces, tabs, newlines)
-                .trim();
-            keyFileServiceAccount.private_key = `-----BEGIN PRIVATE KEY-----\n${cleanedPrivateKey}\n-----END PRIVATE KEY-----\n`;
-            console.log('Google Calendar private key string normalized from file.');
-        }
-
-
-        console.log('Attempting to create JWT client with normalized private key...');
-        const jwtClient = new google.auth.JWT(
-            keyFileServiceAccount.client_email,
-            null, // keyFile is null because we are providing private_key directly
-            keyFileServiceAccount.private_key, // Provide the normalized private_key string
-            ['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar'] // Scopes
-        );
-
-        // Await authorization before proceeding
-        await jwtClient.authorize();
-        console.log('Google Calendar JWT client authorized successfully using provided key data.');
-
-        // Only initialize 'calendar' after successful authorization
-        calendar = google.calendar({ version: 'v3', auth: jwtClient });
+        // Initialize 'calendar' with the obtained authorized client
+        calendar = google.calendar({ version: 'v3', auth: auth });
         console.log('Google Calendar API client initialized and ready.');
 
     } catch (error) {
         console.error('Error during Google Calendar API authorization or initialization using key file. Calendar functionality disabled:', error.message);
-        console.error('Full Google API Auth Error:', error); // Log full error object for more context
+        // Provide specific messages for common file-based errors
+        if (error.code === 'ENOENT') {
+            console.error(`ERROR: Key file not found at ${googleAuthKeyFilePath}. Make sure it's correctly mounted in Render Secret Files.`);
+        } else {
+             // For other errors, log the full error object to get more details
+            console.error('Full Google API Auth Error:', error);
+        }
         calendar = null; // Ensure calendar remains null if there's an error
     }
 }
@@ -161,11 +121,16 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
+        console.log('CORS Request Origin:', origin);
+        if (!origin) {
+            console.log('CORS: Origin is null/undefined, allowing.');
+            return callback(null, true);
+        }
         if (allowedOrigins.includes(origin)) {
+            console.log('CORS: Origin is allowed:', origin);
             return callback(null, true);
         } else {
-            const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}.`;
+            const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`;
             console.error('CORS: Blocked origin.', msg);
             return callback(new Error(msg), false);
         }
@@ -182,6 +147,7 @@ const verifyFirebaseToken = async (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        console.warn('Unauthorized: No Bearer token provided.');
         return res.status(401).json({ error: 'Unauthorized: No token provided.' });
     }
 
@@ -221,18 +187,26 @@ app.post('/api/update-profile', verifyFirebaseToken, async (req, res) => {
     }
 
     try {
-        await auth.updateUser(uid, { displayName: displayName.trim() });
+        await auth.updateUser(uid, {
+            displayName: displayName.trim(),
+        });
+        console.log(`Firebase Auth profile updated for user ${uid}: ${displayName}`);
+
         const userProfileDocRef = db.doc(`artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${uid}/profiles/userProfile`);
         await userProfileDocRef.set({
             userId: uid,
             displayName: displayName.trim(),
             lastUpdated: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
+        console.log(`Firestore profile document updated for user ${uid}: ${displayName}`);
 
         res.status(200).json({ success: true, message: 'User profile updated successfully!' });
 
     } catch (error) {
         console.error('Error updating user profile:', error);
+        if (error.code === 'auth/user-not-found') {
+            return res.status(404).json({ error: 'User not found for profile update.' });
+        }
         return res.status(500).json({ error: 'Failed to update user profile due to a server error.', details: error.message });
     }
 });
@@ -331,8 +305,3 @@ app.listen(port, () => {
     console.log(`Profile update endpoint: http://localhost:${port}/api/update-profile`);
     console.log(`Confirm booking endpoint: http://localhost:${port}/api/confirm-booking`);
 });
-```
-
-This updated code will explicitly read the `google-calendar-key.json` file using `fs.readFileSync`, parse its content, and then pass the `client_email` and `private_key` directly as strings to the `google.auth.JWT` constructor. This should give us much more granular detail in the Render logs about exactly what is failing during the key processing, hopefully leading us to the root cause.
-
-Please update your `server.js` with this content, redeploy your Render service, and then share the new lo
