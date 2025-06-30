@@ -10,12 +10,13 @@ const admin = require('firebase-admin');
 const { google } = require('googleapis'); // Import googleapis library
 
 // --- Firebase Admin SDK Initialization ---
-const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
+// Now expecting the Base64 encoded JSON string directly from the environment variable.
+const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64; // <--- Changed back to FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
 const projectId = process.env.FIREBASE_PROJECT_ID;
-const googleCalendarId = process.env.GOOGLE_CALENDAR_ID; // New: Get Google Calendar ID
+const googleCalendarId = process.env.GOOGLE_CALENDAR_ID;
 
 // Validate critical environment variables
-if (!encodedServiceAccountJson) {
+if (!encodedServiceAccountJson) { // <--- Checking for FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
     console.error('FATAL ERROR: FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 not defined.');
     process.exit(1);
 }
@@ -30,8 +31,11 @@ if (!googleCalendarId) {
 
 let serviceAccount;
 try {
+    // Decode the Base64 string back to its original JSON string format
     const decodedServiceAccountJson = Buffer.from(encodedServiceAccountJson, 'base64').toString('utf8');
-    serviceAccount = JSON.parse(decodedServiceAccountJson);
+    // Parse the JSON string into an object
+    serviceAccount = JSON.parse(decodedServiceAccountJson); 
+    console.log('Service account JSON decoded and parsed successfully from environment variable.');
 
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
@@ -39,7 +43,7 @@ try {
     });
     console.log('Firebase Admin SDK initialized successfully.');
 } catch (error) {
-    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK.', error.message);
+    console.error('FATAL ERROR: Failed to initialize Firebase Admin SDK. Check FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 value or format after decoding/parsing.', error.message);
     process.exit(1);
 }
 
@@ -129,6 +133,15 @@ const verifyFirebaseToken = async (req, res, next) => {
     }
 };
 
+// --- Helper function for getEndTime ---
+const getEndTime = (startTime, durationHours) => {
+    if (!startTime || isNaN(durationHours)) return '';
+    const [hour] = startTime.split(':');
+    const endHour = parseInt(hour) + durationHours;
+    return `${endHour.toString().padStart(2, '0')}:00`;
+};
+
+
 // --- Routes ---
 app.get('/', (req, res) => {
     res.status(200).json({ message: 'DJ Booking Backend is running!' });
@@ -212,8 +225,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                     dateTime: endDate.toISOString(),
                     timeZone: 'Asia/Makassar', // Assuming WITA timezone
                 },
-                // Optional: Add attendees, reminders, etc.
-                // attendees: [{ email: 'your_email@example.com' }], // Add your own email to receive invitations
                 reminders: {
                     useDefault: false,
                     overrides: [
@@ -223,20 +234,12 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 },
             };
 
-            // If it's an update, try to find and update existing event (requires storing eventId)
-            // For simplicity here, we'll always create a new one unless you add eventId to booking data
-            // Or, if editing, you could try to search for the event by title/description and update it.
-            // For this basic implementation, we'll add a new event or handle the case where we don't update directly.
-            // A more advanced solution would store the calendarEventId in Firestore with the booking.
-
             const response = await calendar.events.insert({
                 calendarId: googleCalendarId,
                 resource: event,
-                sendUpdates: 'all' // 'all' sends email updates to attendees, 'none' does not
+                sendUpdates: 'all'
             });
             console.log('Calendar event created:', response.data.htmlLink);
-            // You might want to store response.data.id (calendarEventId) in your Firestore booking document
-            // for future updates or deletions of the calendar event.
 
         } else {
             console.warn('Google Calendar API not initialized or calendar ID not set. Skipping calendar event creation.');
