@@ -6,7 +6,7 @@ from firebase_admin import credentials, auth, firestore
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-import requests 
+import requests
 import google.auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -19,14 +19,12 @@ from google.auth.transport.requests import Request as GoogleAuthRequest # Explic
 app = Flask(__name__)
 
 # Configure CORS - Allow all origins for development, specify origins for production
-# Updated CORS configuration to explicitly allow the GitHub Pages frontend URL
-# FIX: Changed .filter(None) to a list comprehension for Python compatibility
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:5173", # Your local frontend dev server
     "https://maxqon.github.io", # Root GitHub Pages domain
     "https://maxqon.github.io/bookingapp", # Specific GitHub Pages path
     os.environ.get('RENDER_EXTERNAL_URL') # Render's own URL for the backend
-]}}) # Removed .filter(None) from here, will filter the list directly
+]}})
 
 # --- Firebase Admin SDK Initialization ---
 firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY_BASE64')
@@ -59,6 +57,8 @@ GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get('GOOGLE_CALENDAR_CLIENT_SECRET')
 GOOGLE_CALENDAR_REFRESH_TOKEN = os.environ.get('GOOGLE_CALENDAR_REFRESH_TOKEN')
 GOOGLE_CALENDAR_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_CALENDAR_ID')
 
+# Initialize creds and calendar_service globally, but we'll refresh creds per request
+calendar_creds = None
 calendar_service = None
 
 # Print the values of Google Calendar env vars for debugging
@@ -72,7 +72,7 @@ print("--------------------------------------------------\n")
 
 if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALENDAR_REFRESH_TOKEN:
     try:
-        creds = Credentials(
+        calendar_creds = Credentials(
             token=None,
             refresh_token=GOOGLE_CALENDAR_REFRESH_TOKEN,
             token_uri='https://oauth2.googleapis.com/token',
@@ -80,11 +80,9 @@ if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALEND
             client_secret=GOOGLE_CALENDAR_CLIENT_SECRET,
             scopes=['https://www.googleapis.com/auth/calendar.events']
         )
-        # FIX: Pass a google.auth.transport.requests.Request object
-        # The refresh method typically takes a Request object as its first argument.
-        # It does NOT take a separate 'requests.post' as a second argument.
-        creds.refresh(GoogleAuthRequest()) # Use the aliased import
-        calendar_service = build('calendar', 'v3', credentials=creds)
+        # Attempt initial refresh at startup
+        calendar_creds.refresh(GoogleAuthRequest())
+        calendar_service = build('calendar', 'v3', credentials=calendar_creds)
         print("Google Calendar API service initialized successfully.")
     except Exception as e:
         print(f"Error initializing Google Calendar API service: {e}")
@@ -195,8 +193,13 @@ def confirm_booking():
         print(f"Calendar service initialized: {calendar_service is not None}")
         print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
 
-        if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID:
+        if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID and calendar_creds: # Ensure calendar_creds is available
             try:
+                # AGGRESSIVE REFRESH: Attempt to refresh token right before use
+                print("Attempting to refresh Google Calendar token before API call...")
+                calendar_creds.refresh(GoogleAuthRequest())
+                print("Google Calendar token refreshed successfully.")
+
                 selected_date = booking_data['date']
                 selected_time = booking_data['time']
                 duration_hours = booking_data['duration']
@@ -254,7 +257,9 @@ def confirm_booking():
 
 
                 if editing_booking_id:
-                    existing_booking_doc = booking_collection_ref.document(editing_booking_id).get()
+                    existing_booking_doc = db.collection('artifacts').document(
+                        os.environ.get('APP_ID_FOR_FIRESTORE_PATH', 'default-app-id')
+                    ).collection('users').document(request.uid).collection('bookings').document(editing_booking_id).get()
                     existing_calendar_event_id = None
                     if existing_booking_doc.exists:
                         existing_calendar_event_id = existing_booking_doc.to_dict().get('calendarEventId')
@@ -326,24 +331,30 @@ def cancel_calendar_event():
     print(f"Calendar service initialized: {calendar_service is not None}")
     print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
 
-    if not calendar_service or not GOOGLE_CALENDAR_CALENDAR_ID:
-        print("Google Calendar API not initialized or calendar ID missing. Cannot delete event.")
-        return jsonify({"error": "Server Error", "message": "Google Calendar API not initialized or calendar ID missing."}), 500
+    if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID and calendar_creds: # Ensure calendar_creds is available
+        try:
+            # AGGRESSIVE REFRESH: Attempt to refresh token right before use
+            print("Attempting to refresh Google Calendar token before API call for deletion...")
+            calendar_creds.refresh(GoogleAuthRequest())
+            print("Google Calendar token refreshed successfully for deletion.")
 
-    try:
-        calendar_service.events().delete(
-            calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
-            eventId=calendar_event_id
-        ).execute()
-        print(f"Google Calendar event {calendar_event_id} deleted successfully.")
-        return jsonify({"message": f"Calendar event {calendar_event_id} cancelled successfully."}), 200
-    except Exception as e:
-        print(f"CRITICAL ERROR deleting Google Calendar event {calendar_event_id}: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+            calendar_service.events().delete(
+                calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
+                eventId=calendar_event_id
+            ).execute()
+            print(f"Google Calendar event {calendar_event_id} deleted successfully.")
+            return jsonify({"message": f"Calendar event {calendar_event_id} cancelled successfully."}), 200
+        except Exception as e:
+            print(f"CRITICAL ERROR deleting Google Calendar event {calendar_event_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    else:
+        print("Google Calendar API client, calendar ID, or credentials are not ready. Cannot delete event.")
+        return jsonify({"error": "Server Error", "message": "Google Calendar API not initialized or calendar ID missing."}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"Python Calendar Backend listening on port {port}")
     app.run(host='0.0.0.0', port=port)
+
