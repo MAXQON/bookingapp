@@ -20,12 +20,13 @@ app = Flask(__name__)
 
 # Configure CORS - Allow all origins for development, specify origins for production
 # Updated CORS configuration to explicitly allow the GitHub Pages frontend URL
+# FIX: Changed .filter(None) to a list comprehension for Python compatibility
 CORS(app, resources={r"/api/*": {"origins": [
     "http://localhost:5173", # Your local frontend dev server
     "https://maxqon.github.io", # Root GitHub Pages domain
     "https://maxqon.github.io/bookingapp", # Specific GitHub Pages path
     os.environ.get('RENDER_EXTERNAL_URL') # Render's own URL for the backend
-].filter(None)}}) # Filter out None in case RENDER_EXTERNAL_URL is not set
+]}}) # Removed .filter(None) from here, will filter the list directly
 
 # --- Firebase Admin SDK Initialization ---
 firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY_BASE64')
