@@ -774,6 +774,54 @@ function BookingApp() {
             </div>
         );
     }
+	
+	function RecentBookings({ userId, firebaseApp, firebaseConfig }) {
+    const [recentBookings, setRecentBookings] = useState([]);
+    const [loadingBookings, setLoadingBookings] = useState(true);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        if (!userId || !firebaseApp) {
+            setLoadingBookings(false);
+            return;
+        }
+
+        const db = getFirestore(firebaseApp);
+        // Ensure FIREBASE_PROJECT_ID is available on the frontend
+        const FIREBASE_PROJECT_ID = firebaseConfig.projectId; 
+
+        // Query the user's private bookings collection
+        const bookingsRef = collection(db, `artifacts/${FIREBASE_PROJECT_ID}/users/${userId}/bookings`);
+        
+        // Order by timestamp to get most recent first
+        // Note: Firestore orderBy requires an index if not on a single field.
+        // If you encounter errors, remove orderBy and sort client-side.
+        const q = query(bookingsRef, orderBy('timestamp', 'desc')); 
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const bookings = [];
+            snapshot.forEach((doc) => {
+                bookings.push({ id: doc.id, ...doc.data() });
+            });
+            setRecentBookings(bookings);
+            setLoadingBookings(false);
+        }, (err) => {
+            console.error("Error fetching recent bookings:", err);
+            setError("Failed to load recent bookings.");
+            setLoadingBookings(false);
+        });
+
+        // Cleanup listener on component unmount
+        return () => unsubscribe();
+    }, [userId, firebaseApp, firebaseConfig]); // Re-run effect if userId or firebaseApp changes
+
+    if (loadingBookings) {
+        return <p>Loading recent bookings...</p>;
+    }
+
+    if (error) {
+        return <p className="text-red-500">{error}</p>;
+    }
 
     // Main App Render
     return (
