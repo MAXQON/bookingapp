@@ -10,6 +10,8 @@ import datetime
 import pytz # Import pytz for timezone handling
 from flask_mail import Mail, Message # Import Flask-Mail components
 from dotenv import load_dotenv # Import dotenv
+import base64 # Import base64 for decoding
+import tempfile # Import tempfile for creating temporary files
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -17,10 +19,39 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app) # Enable CORS for all routes
 
-# --- Firebase Admin SDK Initialization ---
-# This is handled automatically by the Canvas environment for Firestore access
-# For local development, ensure GOOGLE_APPLICATION_CREDENTIALS is set
+# --- Firebase Admin SDK Initialization for Firestore Credentials ---
+# This section now handles setting up credentials for firestore.Client()
+GOOGLE_APPLICATION_CREDENTIALS_BASE64 = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+
+if GOOGLE_APPLICATION_CREDENTIALS_BASE64:
+    try:
+        # Decode the Base64 string
+        decoded_json_bytes = base64.b64decode(GOOGLE_APPLICATION_CREDENTIALS_BASE64)
+        decoded_json_string = decoded_json_bytes.decode('utf-8')
+
+        # Create a temporary file to store the service account key
+        # This file will be automatically deleted when the app exits
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as temp_key_file:
+            temp_key_file.write(decoded_json_string)
+            temp_key_file_path = temp_key_file.name
+        
+        # Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+        # This tells the google-cloud-python client libraries where to find the credentials
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_key_file_path
+        print(f"Successfully decoded service account key and set GOOGLE_APPLICATION_CREDENTIALS to: {temp_key_file_path}")
+
+    except Exception as e:
+        print(f"FATAL ERROR: Failed to decode GOOGLE_APPLICATION_CREDENTIALS_BASE64 or write to temp file: {e}")
+        # Exit if credentials cannot be set, as Firestore access will fail
+        exit(1)
+else:
+    print("Warning: GOOGLE_APPLICATION_CREDENTIALS_BASE64 environment variable not set. Firestore access may fail.")
+
+
+# Initialize Firestore Client AFTER setting the GOOGLE_APPLICATION_CREDENTIALS env var
 db = firestore.Client()
+print("Firestore Client initialized.")
+
 
 # --- Firebase Project ID from environment (important for security rules path) ---
 FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID")
