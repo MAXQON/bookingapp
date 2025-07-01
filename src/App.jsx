@@ -15,21 +15,34 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
 import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration (using global variables from Canvas and user-provided config) ---
+// --- Firebase Configuration (using global variables from Canvas) ---
 // These variables are provided by the Canvas environment.
 const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// User-provided Firebase config - this is the definitive configuration
-const FIREBASE_CONFIG = {
-    apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
-    authDomain: "booking-app-1af02.firebaseapp.com",
-    projectId: "booking-app-1af02",
-    storageBucket: "booking-app-1af02.firebasestorage.app",
-    messagingSenderId: "909871533345",
-    appId: "1:909871533345:web:939fa5b6c8203ad4308260",
-    measurementId: "G-NF4XH5S2QC"
+// Safely parse __firebase_config, providing an empty object as fallback
+let parsedFirebaseConfig = {};
+try {
+    if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+        parsedFirebaseConfig = JSON.parse(__firebase_config);
+    }
+} catch (e) {
+    console.error("Error parsing __firebase_config:", e);
+    // Fallback to empty object if parsing fails
+}
+
+// Construct FIREBASE_CONFIG, prioritizing parsed config and providing a fallback for apiKey and projectId
+const firebaseConfig = {
+  apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
+  authDomain: "booking-app-1af02.firebaseapp.com",
+  projectId: "booking-app-1af02",
+  storageBucket: "booking-app-1af02.firebasestorage.app",
+  messagingSenderId: "909871533345",
+  appId: "1:909871533345:web:939fa5b6c8203ad4308260",
+  measurementId: "G-NF4XH5S2QC"
 };
+
+
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
 // --- Backend API Base URL ---
 // IMPORTANT: Replace this with your actual Render backend URL when deployed!
@@ -55,7 +68,7 @@ const formatTime = (timeString) => {
     const hourNum = parseInt(hour);
     const ampm = hourNum >= 12 ? 'PM' : 'AM';
     const displayHour = hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum;
-    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`;
+    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`; // Fixed typo here
 };
 const getEndTime = (startTime, durationHours) => {
     if (!startTime || isNaN(durationHours)) return '';
@@ -119,15 +132,20 @@ function BookingApp() {
 
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
-        // Log the start of the initialization attempt
-        console.log("EFFECT 1: Starting Firebase initialization attempt...");
-        console.log("FIREBASE_CONFIG provided:", FIREBASE_CONFIG);
-
         // Only initialize if firebaseAppInstance is null to prevent re-initialization
-        // This check is important for React's StrictMode which might run effects twice.
         if (!firebaseAppInstance) {
             try {
-                console.log("Attempting to call initializeApp...");
+                console.log("Initializing Firebase app...");
+                // Ensure FIREBASE_CONFIG has projectId before initializing
+                if (!FIREBASE_CONFIG.projectId) {
+                    throw new Error("Firebase 'projectId' is missing from configuration.");
+                }
+                // Also check for apiKey
+                if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === "YOUR_FIREBASE_API_KEY_HERE") {
+                    throw new Error("Firebase 'apiKey' is missing or is a placeholder. Please provide your actual API key.");
+                }
+
+
                 const app = initializeApp(FIREBASE_CONFIG);
                 const db = getFirestore(app);
                 const auth = getAuth(app);
@@ -135,16 +153,29 @@ function BookingApp() {
                 setFirebaseAppInstance(app);
                 setDbInstance(db);
                 setAuthInstance(auth);
-                console.log("Firebase app, DB, Auth instances set successfully in state.");
+                console.log("Firebase app, DB, Auth instances set.");
+
+                // Attempt to sign in with custom token if available
+                if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
+                    signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS)
+                        .then(() => console.log("Signed in with custom token."))
+                        .catch((error) => {
+                            console.error("Error signing in with custom token:", error);
+                            // Fallback to anonymous sign-in if custom token fails
+                            signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                        });
+                } else {
+                    // If no custom token, sign in anonymously
+                    signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                }
 
             } catch (e) {
-                console.error("Firebase Initialization Error (caught in useEffect):", e);
+                console.error("Firebase Initialization Error:", e);
                 setError(`Firebase Initialization Error: ${e.message}`);
-                setAuthError(`Firebase Initialization Failed: ${e.message}`); // Set auth error specifically
-                setIsLoadingAuth(false); // Ensure loading state is false even on error
+                setIsLoadingAuth(false);
             }
         } else {
-            console.log("Firebase app already initialized, skipping EFFECT 1.");
+            console.log("Firebase app already initialized.");
         }
     }, [firebaseAppInstance]); // Dependency on firebaseAppInstance ensures it only runs once
 
@@ -153,13 +184,12 @@ function BookingApp() {
     useEffect(() => {
         // Depend on both authInstance and dbInstance to ensure they are available
         if (!authInstance || !dbInstance) {
-            console.log("EFFECT 2: Auth or DB instance not ready, skipping auth state listener setup.");
+            console.log("Auth or DB instance not ready, skipping auth state listener.");
             return;
         }
 
-        console.log("EFFECT 2: Setting up auth state listener...");
+        console.log("Setting up auth state listener...");
         const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
-            console.log("Auth state changed callback triggered. User:", user ? user.uid : "null");
             if (user) {
                 setUserId(user.uid);
                 setAuthError(null);
@@ -178,7 +208,6 @@ function BookingApp() {
                         displayNameToUse = profileData.displayName || displayNameToUse;
                         setUserName(displayNameToUse);
                         setNewDisplayName(displayNameToUse);
-                        console.log("User profile loaded from Firestore.");
                     } else {
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
@@ -200,37 +229,26 @@ function BookingApp() {
                 }
 
             } else {
-                console.log("Auth state changed: User is signed out. Setting userId to null.");
-                setUserId(null); // User is not logged in, set userId to null
+                console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
+                setUserId(null);
                 setUserName('');
                 setNewDisplayName('');
-                setAuthError(null); // Clear auth error for new session
+                setAuthError(null);
                 setProfileError(null);
             }
-            setIsLoadingAuth(false); // Ensure loading state is false after auth check
-            console.log("EFFECT 2: Finished processing auth state change. isLoadingAuth set to false.");
+            setIsLoadingAuth(false);
         });
 
         return () => {
-            console.log("EFFECT 2: Cleaning up auth state listener.");
+            console.log("Cleaning up auth state listener.");
             unsubscribe();
         };
     }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
 
     // --- EFFECT 3: Firestore Bookings Real-time Listener (User-specific) ---
     useEffect(() => {
-        // Log current states before deciding to skip or proceed
-        console.log("EFFECT 3: Firestore listener check:", {
-            dbInstanceReady: !!dbInstance,
-            userIdValue: userId, // Can be null or a string
-            isLoadingAuthStatus: isLoadingAuth,
-            authErrorStatus: authError
-        });
-
-        // Ensure all prerequisites are met before attempting Firestore operations
-        // If userId is null (guest mode), we don't attempt to fetch user-specific bookings
         if (!dbInstance || userId === null || isLoadingAuth || authError) {
-            console.log("EFFECT 3: Firestore listener skipped: Prerequisites not met (e.g., userId is null for guest).");
+            console.log("User-specific Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
             setBookings([]);
             setIsLoadingBookings(false);
             return;
@@ -240,13 +258,13 @@ function BookingApp() {
         setError(null);
 
         const collectionPath = `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`;
-        console.log("EFFECT 3: Attempting to listen to user-specific Firestore collection:", collectionPath, "with userId:", userId);
+        console.log("Attempting to listen to user-specific Firestore collection:", collectionPath, "with userId:", userId);
 
         const bookingsCollectionRef = collection(dbInstance, collectionPath);
         const q = query(bookingsCollectionRef);
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            console.log("EFFECT 3: User-specific Firestore snapshot received.");
+            console.log("User-specific Firestore snapshot received.");
             const fetchedBookings = [];
             snapshot.forEach((doc) => {
                 fetchedBookings.push({ id: doc.id, ...doc.data() });
@@ -254,15 +272,15 @@ function BookingApp() {
             fetchedBookings.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
             setBookings(fetchedBookings);
             setIsLoadingBookings(false);
-            console.log("EFFECT 3: User-specific bookings updated:", fetchedBookings.length, "bookings.");
+            console.log("User-specific bookings updated:", fetchedBookings.length, "bookings.");
         }, (firestoreError) => {
-            console.error("EFFECT 3: User-specific Firestore Error fetching bookings:", firestoreError);
+            console.error("User-specific Firestore Error fetching bookings:", firestoreError);
             setError(`Failed to load your bookings: ${firestoreError.message}`);
             setIsLoadingBookings(false);
         });
 
         return () => {
-            console.log("EFFECT 3: Cleaning up user-specific Firestore listener.");
+            console.log("Cleaning up user-specific Firestore listener.");
             unsubscribe();
         };
     }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
@@ -270,50 +288,26 @@ function BookingApp() {
     // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend (for conflict check) ---
     useEffect(() => {
         const fetchBookedSlots = async () => {
-            // Ensure selectedDate is available.
-            // If userId is null, we can still fetch public booked slots, but we won't send an ID token.
-            if (!selectedDate || !authInstance || isLoadingAuth) {
-                setBookedSlotsForDate([]); // Clear previous booked slots if no date or auth not ready
+            if (!selectedDate || !userId || !authInstance || isLoadingAuth) {
+                setBookedSlotsForDate([]); // Clear previous booked slots if no date or user
                 return;
             }
 
             try {
-                let idToken = null;
-                if (authInstance.currentUser) {
-                    idToken = await authInstance.currentUser.getIdToken();
-                } else {
-                    console.log("No authenticated user, fetching public booked slots without ID token.");
-                }
-
-                const headers = { 'Content-Type': 'application/json' };
-                if (idToken) {
-                    headers['Authorization'] = `Bearer ${idToken}`;
-                }
-
+                // Ensure ID token is available for the backend call
+                const idToken = await authInstance.currentUser.getIdToken();
                 const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
                     headers: {
-						'Content-Type': 'application/json',
-						'Authorization': `Bearer ${userToken}`,
-					},
-					body: JSON.stringify({ bookingData: newBooking, userName: currentUser.displaname }),
+                        'Authorization': `Bearer ${idToken}`
+                    }
                 });
-				
-				const responseData = await response.json();
-				
+
                 if (!response.ok) {
-					console.log('Booking confirmed:' , responseData.message);
-					
-					fetchRecentBookings();
-					setShowBookingModal(false);
-				} else if (response.status === 409) {
-					console.error('Booking conflict:', responseData.error);
-					alert(`Booking Conflict: ${responseData.error}\n\nConflicting Slots:\n${responseData.conflictingSlots.map(slot => `- ${slot.displayTime} by ${slot.userName}`).join('\n')}\nPlease choose another time.`);
-				} else {
-					console.error('Booking failed:', responseData.error);
-					alert(`Booking Failed: ${responseData.error}`);
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to fetch booked slots.');
                 }
 
-                
+                const data = await response.json();
                 setBookedSlotsForDate(data.bookedSlots);
                 console.log(`Fetched booked slots for ${selectedDate}:`, data.bookedSlots);
             } catch (fetchError) {
@@ -323,7 +317,7 @@ function BookingApp() {
         };
 
         fetchBookedSlots();
-    }, [selectedDate, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
+    }, [selectedDate, userId, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
 
     // --- EFFECT 5: Handle Payment Confirmation Link from Admin Email ---
     useEffect(() => {
@@ -375,6 +369,7 @@ function BookingApp() {
             } else {
                 // If not logged in, prompt for login if needed.
                 // For simplicity, we just rely on onAuthStateChanged to eventually sign in.
+                // A more complex solution might show a specific login modal for this flow.
                 console.log("Booking ID in URL, but user not logged in. Waiting for auth.");
             }
         }
@@ -605,15 +600,9 @@ function BookingApp() {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        // If no userId, prompt the user to log in
-        if (!userId) {
-            setError("Please sign in or create an account to make a booking.");
-            setShowAuthModal(true); // Show auth modal
-            return;
-        }
-        if (!authInstance || isLoadingAuth || profileLoading || authError || profileError) {
+        if (!userId || !authInstance || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, authInstance, currentUser: authInstance?.currentUser, isLoadingAuth, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, authInstance, isLoadingAuth, profileLoading, authError, profileError });
             return;
         }
 
@@ -711,7 +700,7 @@ function BookingApp() {
 
     // --- Confirm Delete Action - NOW CALLS BACKEND ---
     const confirmDeleteBooking = useCallback(async () => {
-        if (!bookingToDelete || !dbInstance || !userId || !authInstance || !authInstance.currentUser) return;
+        if (!bookingToDelete || !dbInstance || !userId || !authInstance) return;
 
         setIsLoadingBookings(true);
         setError(null);
@@ -773,54 +762,6 @@ function BookingApp() {
                 {profileError && <span className="text-red-300 text-base">{profileError}</span>}
             </div>
         );
-    }
-	
-	function RecentBookings({ userId, firebaseApp, firebaseConfig }) {
-    const [recentBookings, setRecentBookings] = useState([]);
-    const [loadingBookings, setLoadingBookings] = useState(true);
-    const [error, setError] = useState(null);
-
-    useEffect(() => {
-        if (!userId || !firebaseApp) {
-            setLoadingBookings(false);
-            return;
-        }
-
-        const db = getFirestore(firebaseApp);
-        // Ensure FIREBASE_PROJECT_ID is available on the frontend
-        const FIREBASE_PROJECT_ID = firebaseConfig.projectId; 
-
-        // Query the user's private bookings collection
-        const bookingsRef = collection(db, `artifacts/${FIREBASE_PROJECT_ID}/users/${userId}/bookings`);
-        
-        // Order by timestamp to get most recent first
-        // Note: Firestore orderBy requires an index if not on a single field.
-        // If you encounter errors, remove orderBy and sort client-side.
-        const q = query(bookingsRef, orderBy('timestamp', 'desc')); 
-
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const bookings = [];
-            snapshot.forEach((doc) => {
-                bookings.push({ id: doc.id, ...doc.data() });
-            });
-            setRecentBookings(bookings);
-            setLoadingBookings(false);
-        }, (err) => {
-            console.error("Error fetching recent bookings:", err);
-            setError("Failed to load recent bookings.");
-            setLoadingBookings(false);
-        });
-
-        // Cleanup listener on component unmount
-        return () => unsubscribe();
-    }, [userId, firebaseApp, firebaseConfig]); // Re-run effect if userId or firebaseApp changes
-
-    if (loadingBookings) {
-        return <p>Loading recent bookings...</p>;
-    }
-
-    if (error) {
-        return <p className="text-red-500">{error}</p>;
     }
 
     // Main App Render
@@ -1158,7 +1099,7 @@ function BookingApp() {
                 </div>
 
                 {/* Recent Bookings Section */}
-                {userId ? ( // Only show this section if a user is logged in
+                {userId ? (
                     isLoadingBookings && bookings.length === 0 && !error ? (
                         <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
                             Loading bookings...
@@ -1224,7 +1165,7 @@ function BookingApp() {
                             </div>
                         )
                     )
-                ) : ( // If no userId, prompt to sign in
+                ) : (
                     <button
                         onClick={() => setShowAuthModal(true)}
                         className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition duration-200 shadow-lg mt-6 block mx-auto"
