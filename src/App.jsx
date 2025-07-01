@@ -372,87 +372,90 @@ function BookingApp() {
         } finally {
             setProfileLoading(false);
         }
-    }, [userId, authInstance, newDisplayName]); // Removed dbInstance as it's not directly used here now
+    }, [userId, authInstance, newDisplayName]);
 
-
-    // --- Handle Booking Submission (new/update) ---
-    const handleBooking = useCallback(() => {
+    // --- Handle Booking Submission (new/update) - NOW CALLS BACKEND ---
+    const handleBooking = useCallback(async () => { // Changed to async
         if (!selectedDate || !selectedTime) {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !dbInstance || isLoadingAuth || profileLoading || authError || profileError) {
+        if (!userId || !authInstance || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, authInstance, isLoadingAuth, profileLoading, authError, profileError });
             return;
         }
 
-        if (selectedPaymentMethod === 'online') {
-            setShowPaymentSimulationModal(true);
-        } else {
-            confirmBooking('pending');
-        }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, dbInstance, isLoadingAuth, profileLoading, authError, profileError, selectedPaymentMethod]);
+        // Get the current ID token for authentication with your backend
+        const idToken = await authInstance.currentUser.getIdToken();
 
+        const bookingDataToSend = {
+            date: selectedDate,
+            time: selectedTime,
+            duration: duration,
+            equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
+            total: calculateTotal(),
+            paymentMethod: selectedPaymentMethod,
+            paymentStatus: selectedPaymentMethod === 'online' ? 'pending' : 'pending', // Always pending initially, backend will update
+            userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone // Send user's local timezone
+        };
 
-    // --- Function to actually confirm and save/update the booking to Firestore ---
-    const confirmBooking = useCallback(async (paymentStatus) => {
+        setIsLoadingBookings(true);
+        setError(null);
+
         try {
-            setError(null);
-            setIsLoadingBookings(true);
-            const totalCost = calculateTotal();
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}` // Send the ID Token
+                },
+                body: JSON.stringify({
+                    bookingData: bookingDataToSend,
+                    userName: userName, // Send current userName to backend
+                    editingBookingId: editingBookingId // Send if in edit mode
+                })
+            });
 
-            let currentUserName = userName;
-            if (!currentUserName && authInstance.currentUser) {
-                currentUserName = authInstance.currentUser.displayName || authInstance.currentUser.email || userId;
-            } else if (!currentUserName) {
-                currentUserName = 'Anonymous User';
-            }
+            const data = await response.json();
 
-            const newBookingData = {
-                date: selectedDate,
-                time: selectedTime,
-                duration: duration,
-                equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-                total: totalCost,
-                userId: userId,
-                userName: currentUserName, // Store the user's name with the booking
-                timestamp: serverTimestamp(),
-                paymentMethod: selectedPaymentMethod,
-                paymentStatus: paymentStatus,
-                userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone // ADDED: Send user's local timezone
-            };
-
-            const bookingsCollectionRef = collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`);
-
-            if (editingBookingId) {
-                const bookingDocRef = doc(bookingsCollectionRef, editingBookingId);
-                await setDoc(bookingDocRef, newBookingData, { merge: true });
-                console.log("Booking successfully UPDATED with ID:", editingBookingId);
-                setCurrentBooking({ ...newBookingData, id: editingBookingId, timestamp: new Date() });
-                setShowConfirmation(true);
+            if (!response.ok) {
+                // Handle specific backend errors (e.g., conflict)
+                if (response.status === 409) { // Conflict
+                    setError(data.error || 'Time slot already booked.');
+                    // Optionally, display conflicting slots from data.conflictingSlots
+                } else {
+                    throw new Error(data.error || 'Failed to confirm booking via backend.');
+                }
             } else {
-                const docRef = await addDoc(bookingsCollectionRef, newBookingData);
-                console.log("Booking successfully ADDED with ID:", docRef.id);
-                setCurrentBooking({ ...newBookingData, id: docRef.id, timestamp: new Date() });
+                console.log("Booking confirmed via backend:", data);
+                // The backend now handles Firestore updates and calendar integration
+                // We can just show the confirmation based on backend's success
+                setCurrentBooking({
+                    ...bookingDataToSend,
+                    id: data.bookingId, // Get actual Firestore ID from backend response
+                    timestamp: new Date(), // Use local time for immediate modal display
+                    paymentStatus: bookingDataToSend.paymentStatus // Use the status sent
+                });
                 setShowConfirmation(true);
+
+                // Reset form fields after successful booking
+                setEditingBookingId(null);
+                setSelectedDate('');
+                setSelectedTime('');
+                setDuration(2);
+                setSelectedEquipment([]);
+                setSelectedPaymentMethod('cash');
             }
-
-            setEditingBookingId(null);
-            setSelectedDate('');
-            setSelectedTime('');
-            setDuration(2);
-            setSelectedEquipment([]);
-            setSelectedPaymentMethod('cash');
-
         } catch (bookingError) {
-            console.error(`Error ${editingBookingId ? 'updating' : 'adding'} booking to Firestore:`, bookingError);
-            setError(`Failed to ${editingBookingId ? 'update' : 'book'} session: ${bookingError.message}`);
+            console.error("Error calling backend for booking:", bookingError);
+            setError(`Failed to book session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
-            setShowPaymentSimulationModal(false);
+            setShowPaymentSimulationModal(false); // Close simulation modal if open
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, userName, dbInstance, selectedPaymentMethod, APP_ID_FOR_FIRESTORE_PATH, editingBookingId, authInstance]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, userName, editingBookingId, selectedPaymentMethod, isLoadingAuth, profileLoading, authError, profileError]);
+
 
     // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
@@ -475,57 +478,46 @@ function BookingApp() {
         setShowDeleteConfirmation(true);
     }, []);
 
-    // --- Confirm Delete Action ---
+    // --- Confirm Delete Action - NOW CALLS BACKEND ---
     const confirmDeleteBooking = useCallback(async () => {
-        if (!bookingToDelete || !dbInstance || !userId) return;
+        if (!bookingToDelete || !dbInstance || !userId || !authInstance) return;
+
+        setIsLoadingBookings(true);
+        setError(null);
 
         try {
-            setError(null);
-            setIsLoadingBookings(true);
-            const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
-            
-            // Fetch the very latest booking data from Firestore before attempting deletion
-            // This ensures we have the correct calendarEventId, especially if it was just added/updated
-            const latestBookingSnap = await getDoc(bookingDocRef);
-            let calendarEventIdForDeletion = null;
-            if (latestBookingSnap.exists()) {
-                const latestBookingData = latestBookingSnap.data();
-                calendarEventIdForDeletion = latestBookingData.calendarEventId;
-                console.log("Retrieved latest calendarEventId for deletion:", calendarEventIdForDeletion);
-            } else {
-                console.warn(`Booking ${bookingToDelete.id} not found in Firestore. Cannot get calendarEventId for deletion.`);
-            }
+            const idToken = await authInstance.currentUser.getIdToken();
 
             // First, attempt to delete from Google Calendar via backend
-            if (calendarEventIdForDeletion) {
+            if (bookingToDelete.calendarEventId) {
                 try {
-                    const idToken = await authInstance.currentUser.getIdToken();
                     const response = await fetch(`${BACKEND_API_BASE_URL}/api/cancel-calendar-event`, {
                         method: 'DELETE',
                         headers: {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${idToken}`
                         },
-                        body: JSON.stringify({ calendarEventId: calendarEventIdForDeletion })
+                        body: JSON.stringify({ calendarEventId: bookingToDelete.calendarEventId })
                     });
 
                     const data = await response.json();
                     if (!response.ok) {
-                        // Even if calendar delete fails, try to delete from Firestore
-                        console.warn('Failed to delete calendar event, proceeding with Firestore delete:', data.error || 'Unknown error');
+                        console.warn('Failed to delete calendar event via backend, proceeding with Firestore delete:', data.error || 'Unknown error');
                         setError(`Failed to remove from calendar: ${data.error || 'Unknown error'}. Deleting from app.`);
                     } else {
-                        console.log("Calendar event deleted successfully via backend:", calendarEventIdForDeletion);
+                        console.log("Calendar event deleted successfully via backend:", bookingToDelete.calendarEventId);
                     }
                 } catch (calendarDeleteError) {
                     console.warn('Network error or unexpected error during calendar delete via backend:', calendarDeleteError);
                     setError(`Network error or unexpected calendar error: ${calendarDeleteError.message}. Deleting from app.`);
                 }
             } else {
-                console.log("No calendarEventId found for booking or booking not found in Firestore, skipping calendar delete.");
+                console.log("No calendarEventId found for booking, skipping calendar delete.");
             }
 
-            // Always proceed to delete from Firestore
+            // Always proceed to delete from Firestore (directly from frontend for simplicity,
+            // or you could add a backend endpoint for this too if more complex logic is needed)
+            const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
             await deleteDoc(bookingDocRef);
             console.log("Booking successfully deleted from Firestore:", bookingToDelete.id);
             
@@ -1044,55 +1036,6 @@ function BookingApp() {
                     </div>
                 )}
 
-                {/* Profile Management Modal */}
-                {showProfileModal && userId && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
-                                Manage Profile
-                            </h2>
-                            {profileError && (
-                                <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4 text-sm" role="alert">
-                                    {profileError}
-                                </div>
-                            )}
-                            <div className="space-y-4">
-                                <div>
-                                    <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-2">Display Name</label>
-                                    <input
-                                        type="text"
-                                        id="displayName"
-                                        value={newDisplayName}
-                                        onChange={(e) => setNewDisplayName(e.target.value)}
-                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                        placeholder="Your Name"
-                                    />
-                                </div>
-                            </div>
-                            <div className="mt-6 space-y-4">
-                                <button
-                                    onClick={handleUpdateProfile}
-                                    disabled={profileLoading}
-                                    className="w-full px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition duration-200"
-                                >
-                                    {profileLoading ? 'Updating...' : 'Update Profile'}
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        setShowProfileModal(false);
-                                        setProfileError(null);
-                                        setNewDisplayName(userName); // Reset newDisplayName to current userName if user cancels
-                                    }}
-                                    className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-
                 {/* Payment Simulation Modal */}
                 {showPaymentSimulationModal && (
                     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
@@ -1105,7 +1048,7 @@ function BookingApp() {
                             </p>
                             <div className="flex justify-center gap-4">
                                 <button
-                                    onClick={() => confirmBooking('paid')}
+                                    onClick={() => handleBooking()} // Call handleBooking again to trigger backend call with 'paid' status
                                     className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
                                 >
                                     Confirm Payment (Simulated)
