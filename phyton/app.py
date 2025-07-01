@@ -6,19 +6,26 @@ from firebase_admin import credentials, auth, firestore
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-import requests
+import requests 
 import google.auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import datetime
 import pytz
 import base64
+from google.auth.transport.requests import Request as GoogleAuthRequest # Explicitly import Request and alias it
 
 # Initialize Flask App
 app = Flask(__name__)
 
 # Configure CORS - Allow all origins for development, specify origins for production
-CORS(app)
+# Updated CORS configuration to explicitly allow the GitHub Pages frontend URL
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://localhost:5173", # Your local frontend dev server
+    "https://maxqon.github.io", # Root GitHub Pages domain
+    "https://maxqon.github.io/bookingapp", # Specific GitHub Pages path
+    os.environ.get('RENDER_EXTERNAL_URL') # Render's own URL for the backend
+].filter(None)}}) # Filter out None in case RENDER_EXTERNAL_URL is not set
 
 # --- Firebase Admin SDK Initialization ---
 firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY_BASE64')
@@ -75,7 +82,7 @@ if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALEND
         # FIX: Pass a google.auth.transport.requests.Request object
         # The refresh method typically takes a Request object as its first argument.
         # It does NOT take a separate 'requests.post' as a second argument.
-        creds.refresh(google.auth.transport.requests.Request())
+        creds.refresh(GoogleAuthRequest()) # Use the aliased import
         calendar_service = build('calendar', 'v3', credentials=creds)
         print("Google Calendar API service initialized successfully.")
     except Exception as e:
@@ -339,4 +346,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"Python Calendar Backend listening on port {port}")
     app.run(host='0.0.0.0', port=port)
-
