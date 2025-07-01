@@ -12,7 +12,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import datetime
 import pytz
-import base64 # Import the base64 module
+import base64
 
 # Initialize Flask App
 app = Flask(__name__)
@@ -25,10 +25,6 @@ firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_K
 
 if firebase_service_account_key_base64:
     try:
-        # Corrected base64 decoding:
-        # 1. Encode the string to bytes (e.g., utf-8)
-        # 2. Decode from base64
-        # 3. Decode the resulting bytes back to a UTF-8 string
         service_account_info_str = base64.b64decode(firebase_service_account_key_base64).decode('utf-8')
         service_account_info = json.loads(service_account_info_str)
         
@@ -76,7 +72,10 @@ if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALEND
             client_secret=GOOGLE_CALENDAR_CLIENT_SECRET,
             scopes=['https://www.googleapis.com/auth/calendar.events']
         )
-        creds.refresh(requests.Request(), requests.post)
+        # FIX: Pass a google.auth.transport.requests.Request object
+        # The refresh method typically takes a Request object as its first argument.
+        # It does NOT take a separate 'requests.post' as a second argument.
+        creds.refresh(google.auth.transport.requests.Request())
         calendar_service = build('calendar', 'v3', credentials=creds)
         print("Google Calendar API service initialized successfully.")
     except Exception as e:
