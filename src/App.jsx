@@ -137,23 +137,6 @@ function BookingApp() {
                 setAuthInstance(auth);
                 console.log("Firebase app, DB, Auth instances set successfully in state.");
 
-                // Attempt to sign in with custom token if available
-                if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
-                    console.log("Attempting sign-in with custom token...");
-                    signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS)
-                        .then(() => console.log("Signed in with custom token."))
-                        .catch((error) => {
-                            console.error("Error signing in with custom token:", error);
-                            // Fallback to anonymous sign-in if custom token fails
-                            console.log("Falling back to anonymous sign-in...");
-                            signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
-                        });
-                } else {
-                    // If no custom token, sign in anonymously
-                    console.log("No custom token, attempting anonymous sign-in...");
-                    signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
-                }
-
             } catch (e) {
                 console.error("Firebase Initialization Error (caught in useEffect):", e);
                 setError(`Firebase Initialization Error: ${e.message}`);
@@ -217,17 +200,8 @@ function BookingApp() {
                 }
 
             } else {
-                console.log("Auth state changed: User is signed out.");
-                // If user signs out, attempt anonymous sign-in again to maintain a session
-                try {
-                    console.log("Attempting anonymous sign-in after logout...");
-                    await signInAnonymously(authInstance);
-                    console.log("Signed in anonymously after logout.");
-                } catch (anonSignInError) {
-                    console.error("Error signing in anonymously after logout:", anonSignInError);
-                    setAuthError(`Authentication failed after logout: ${anonSignInError.message}`);
-                }
-                setUserId(null); // Will be updated by the anonymous sign-in if successful
+                console.log("Auth state changed: User is signed out. Setting userId to null.");
+                setUserId(null); // User is not logged in, set userId to null
                 setUserName('');
                 setNewDisplayName('');
                 setAuthError(null); // Clear auth error for new session
@@ -254,8 +228,9 @@ function BookingApp() {
         });
 
         // Ensure all prerequisites are met before attempting Firestore operations
+        // If userId is null (guest mode), we don't attempt to fetch user-specific bookings
         if (!dbInstance || userId === null || isLoadingAuth || authError) {
-            console.log("EFFECT 3: Firestore listener skipped: Prerequisites not met.");
+            console.log("EFFECT 3: Firestore listener skipped: Prerequisites not met (e.g., userId is null for guest).");
             setBookings([]);
             setIsLoadingBookings(false);
             return;
@@ -295,27 +270,50 @@ function BookingApp() {
     // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend (for conflict check) ---
     useEffect(() => {
         const fetchBookedSlots = async () => {
-            // Ensure userId and authInstance.currentUser are available before attempting to get token
-            if (!selectedDate || !userId || !authInstance || !authInstance.currentUser || isLoadingAuth) {
-                setBookedSlotsForDate([]); // Clear previous booked slots if no date or user
+            // Ensure selectedDate is available.
+            // If userId is null, we can still fetch public booked slots, but we won't send an ID token.
+            if (!selectedDate || !authInstance || isLoadingAuth) {
+                setBookedSlotsForDate([]); // Clear previous booked slots if no date or auth not ready
                 return;
             }
 
             try {
-                // Ensure ID token is available for the backend call
-                const idToken = await authInstance.currentUser.getIdToken();
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
-                    headers: {
-                        'Authorization': `Bearer ${idToken}`
-                    }
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to fetch booked slots.');
+                let idToken = null;
+                if (authInstance.currentUser) {
+                    idToken = await authInstance.currentUser.getIdToken();
+                } else {
+                    console.log("No authenticated user, fetching public booked slots without ID token.");
                 }
 
-                const data = await response.json();
+                const headers = { 'Content-Type': 'application/json' };
+                if (idToken) {
+                    headers['Authorization'] = `Bearer ${idToken}`;
+                }
+
+                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
+                    headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${userToken}`,
+					},
+					body: JSON.stringify({ bookingData: newBooking, userName: currentUser.displaname }),
+                });
+				
+				const responseData = await response.json();
+				
+                if (!response.ok) {
+					console.log('Booking confirmed:' , responseData.message);
+					
+					fetchRecentBookings();
+					setShowBookingModal(false);
+				} else if (response.status === 409) {
+					console.error('Booking conflict:', responseData.error);
+					alert(`Booking Conflict: ${responseData.error}\n\nConflicting Slots:\n${responseData.conflictingSlots.map(slot => `- ${slot.displayTime} by ${slot.userName}`).join('\n')}\nPlease choose another time.`);
+				} else {
+					console.error('Booking failed:', responseData.error);
+					alert(`Booking Failed: ${responseData.error}`);
+                }
+
+                
                 setBookedSlotsForDate(data.bookedSlots);
                 console.log(`Fetched booked slots for ${selectedDate}:`, data.bookedSlots);
             } catch (fetchError) {
@@ -325,7 +323,7 @@ function BookingApp() {
         };
 
         fetchBookedSlots();
-    }, [selectedDate, userId, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
+    }, [selectedDate, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
 
     // --- EFFECT 5: Handle Payment Confirmation Link from Admin Email ---
     useEffect(() => {
@@ -607,7 +605,13 @@ function BookingApp() {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !authInstance || !authInstance.currentUser || isLoadingAuth || profileLoading || authError || profileError) {
+        // If no userId, prompt the user to log in
+        if (!userId) {
+            setError("Please sign in or create an account to make a booking.");
+            setShowAuthModal(true); // Show auth modal
+            return;
+        }
+        if (!authInstance || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
             console.error("Booking attempted when app state not ready.", { userId, authInstance, currentUser: authInstance?.currentUser, isLoadingAuth, profileLoading, authError, profileError });
             return;

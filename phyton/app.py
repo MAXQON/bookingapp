@@ -13,6 +13,11 @@ from dotenv import load_dotenv # Import dotenv
 import base64 # Import base64 for decoding
 import tempfile # Import tempfile for creating temporary files
 
+# --- Google Calendar API Imports ---
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 # Load environment variables from .env file (for local development)
 load_dotenv()
 
@@ -22,6 +27,9 @@ CORS(app) # Enable CORS for all routes
 # --- Firebase Admin SDK Initialization for Firestore Credentials ---
 # This section now handles setting up credentials for firestore.Client()
 GOOGLE_APPLICATION_CREDENTIALS_BASE64 = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+
+# Path for the temporary service account key file
+temp_key_file_path = None
 
 if GOOGLE_APPLICATION_CREDENTIALS_BASE64:
     try:
@@ -45,12 +53,34 @@ if GOOGLE_APPLICATION_CREDENTIALS_BASE64:
         # Exit if credentials cannot be set, as Firestore access will fail
         exit(1)
 else:
-    print("Warning: GOOGLE_APPLICATION_CREDENTIALS_BASE64 environment variable not set. Firestore access may fail.")
+    print("Warning: GOOGLE_APPLICATION_CREDENTIALS_BASE64 environment variable not set. Firestore access may fail and Google Calendar integration will not work.")
 
 
 # Initialize Firestore Client AFTER setting the GOOGLE_APPLICATION_CREDENTIALS env var
 db = firestore.Client()
 print("Firestore Client initialized.")
+
+# --- Initialize Google Calendar Service ---
+# This uses the same GOOGLE_APPLICATION_CREDENTIALS for service account authentication
+calendar_service = None
+if temp_key_file_path:
+    try:
+        # Define the scope for Google Calendar API access
+        # 'https://www.googleapis.com/auth/calendar' grants full access
+        # 'https://www.googleapis.com/auth/calendar.events' grants access to create/edit/delete events
+        SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+        
+        # Load credentials from the temporary service account key file
+        creds = Credentials.from_service_account_file(temp_key_file_path, scopes=SCOPES)
+        
+        # Build the Google Calendar API service
+        calendar_service = build('calendar', 'v3', credentials=creds)
+        print("Google Calendar service initialized successfully.")
+    except Exception as e:
+        print(f"ERROR: Failed to initialize Google Calendar service: {e}")
+        calendar_service = None # Ensure it's None if initialization fails
+else:
+    print("Warning: Google Calendar service not initialized due to missing GOOGLE_APPLICATION_CREDENTIALS_BASE64.")
 
 
 # --- Firebase Project ID from environment (important for security rules path) ---
@@ -84,6 +114,14 @@ mail = Mail(app)
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@example.com')
 if ADMIN_EMAIL == 'admin@example.com':
     print("Warning: ADMIN_EMAIL environment variable not set. Admin notifications will go to a placeholder email.")
+
+# --- Google Calendar ID for your booking calendar ---
+# This is the ID of the specific Google Calendar where bookings will be added.
+# It can be your primary calendar email or a shared calendar's ID.
+GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID', 'primary') # 'primary' refers to the service account's primary calendar
+if GOOGLE_CALENDAR_ID == 'primary':
+    print("Warning: GOOGLE_CALENDAR_ID environment variable not set. Using 'primary' calendar for Google Calendar integration.")
+
 
 # --- Utility Functions ---
 
@@ -219,7 +257,7 @@ def confirm_booking():
     """
     Endpoint to confirm a DJ studio booking.
     Handles adding new bookings or updating existing ones.
-    Includes conflict checking and sends confirmation emails.
+    Includes conflict checking, sends confirmation emails, and creates Google Calendar events.
     """
     try:
         claims = verify_token(request)
@@ -254,18 +292,14 @@ def confirm_booking():
             return jsonify({"error": "Invalid timezone or date/time format."}), 400
 
         # Define studio operating hours in UTC for comparison
-        # Assuming studio hours 9 AM to 6 PM local time, convert these to UTC based on a typical offset (e.g., +7 for Jakarta)
-        # This is a simplification; a more robust solution would store studio timezone.
-        # Otherwise, the client-side validation using moment.js handles display.
-        # Here, we validate against actual end time vs. studio closing time (6 PM local time, converted to UTC)
-        
-        # Calculate studio closing time for the selected date in UTC
-        # Assuming studio is in Asia/Jakarta (WITA), which is +08:00
-        studio_tz = pytz.timezone('Asia/Jakarta')
-        naive_closing_dt = datetime.datetime.strptime(f"{selected_date_str} 18:00", '%Y-%m-%d %H:%M')
+        # Assuming studio is in Asia/Jakarta (WITA), which is +07:00 (not +08:00 as previously noted, WITA is UTC+8, but Jakarta is UTC+7)
+        # Let's adjust to UTC+7 for Jakarta (WIB) or UTC+8 for WITA
+        # For consistency, let's assume the studio is in a fixed timezone, e.g., Asia/Jakarta (WIB, UTC+7) or Asia/Makassar (WITA, UTC+8)
+        # Given the context of Bali, WITA (UTC+8) is more appropriate.
+        studio_tz = pytz.timezone('Asia/Makassar') # WITA timezone for Bali
+        naive_closing_dt = datetime.datetime.strptime(f"{selected_date_str} 18:00", '%Y-%m-%d %H:%M') # 6 PM local time
         studio_closing_dt_local = studio_tz.localize(naive_closing_dt)
         studio_closing_dt_utc = studio_closing_dt_local.astimezone(pytz.utc)
-
 
         # Check if proposed booking ends after studio closing time
         if booking_end_dt_utc > studio_closing_dt_utc:
@@ -295,18 +329,23 @@ def confirm_booking():
                 existing_start_dt_utc = existing_start_dt_local.astimezone(pytz.utc)
                 existing_end_dt_utc = existing_start_dt_utc + datetime.timedelta(hours=existing_booking['duration'])
             except Exception as e:
-                print(f"Error converting existing booking time: {e}")
+                print(f"Error converting existing booking time for conflict check: {e}")
                 continue # Skip this existing booking if its time data is malformed
 
             # Check for overlap: (StartA < EndB) and (EndA > StartB)
             if (booking_start_dt_utc < existing_end_dt_utc and
                 booking_end_dt_utc > existing_start_dt_utc):
+                # Convert existing booking times to the user's timezone for display in conflict message
+                display_start_time_local = existing_start_dt_utc.astimezone(local_tz).strftime('%I:%M %p')
+                display_end_time_local = existing_end_dt_utc.astimezone(local_tz).strftime('%I:%M %p')
+
                 conflicting_slots.append({
                     "id": existing_booking_id,
-                    "time": existing_booking['time'],
+                    "time": existing_booking['time'], # Original time string
                     "duration": existing_booking['duration'],
                     "userName": existing_booking.get('userName', 'Another User'),
-                    "userTimeZone": existing_user_timezone
+                    "userTimeZone": existing_user_timezone,
+                    "displayTime": f"{display_start_time_local} - {display_end_time_local}" # Formatted for display
                 })
 
         if conflicting_slots:
@@ -328,6 +367,7 @@ def confirm_booking():
             'userTimeZone': user_timezone # Store the user's timezone
         }
 
+        booking_id = editing_booking_id # Initialize booking_id
         if editing_booking_id:
             # Update existing booking
             booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings').document(editing_booking_id)
@@ -364,6 +404,80 @@ def confirm_booking():
             "userTimeZone": user_timezone
         }
 
+        # --- Google Calendar Event Creation ---
+        if calendar_service:
+            try:
+                # Event summary (title)
+                event_summary = f"DJ Studio Booking: {client_user_name}"
+                
+                # Event description
+                event_description = (
+                    f"Client: {client_user_name}\n"
+                    f"Email: {user_email}\n"
+                    f"Duration: {duration} hours\n"
+                    f"Equipment: {', '.join([eq['name'] for eq in booking_data.get('equipment', [])]) or 'None'}\n"
+                    f"Total: Rp {full_booking_details['total']:,.0f}\n"
+                    f"Payment Status: {full_booking_details['paymentStatus'].upper()}"
+                )
+
+                # Google Calendar API expects ISO 8601 format with timezone offset
+                # Use the UTC datetime objects for Google Calendar
+                start_time_iso = booking_start_dt_utc.isoformat()
+                end_time_iso = booking_end_dt_utc.isoformat()
+
+                event = {
+                    'summary': event_summary,
+                    'description': event_description,
+                    'start': {
+                        'dateTime': start_time_iso,
+                        'timeZone': 'UTC', # Store in UTC and let Google Calendar handle display
+                    },
+                    'end': {
+                        'dateTime': end_time_iso,
+                        'timeZone': 'UTC', # Store in UTC
+                    },
+                    'attendees': [
+                        {'email': user_email}, # Client's email
+                        {'email': ADMIN_EMAIL}, # Admin's email
+                    ],
+                    'reminders': {
+                        'useDefault': False,
+                        'overrides': [
+                            {'method': 'email', 'minutes': 24 * 60}, # 24 hours before
+                            {'method': 'popup', 'minutes': 60},    # 1 hour before
+                        ],
+                    },
+                    'extendedProperties': {
+                        'private': {
+                            'bookingId': booking_id, # Store booking ID for future reference
+                            'userId': user_id,
+                        }
+                    }
+                }
+
+                # Insert the event into the specified Google Calendar
+                created_event = calendar_service.events().insert(
+                    calendarId=GOOGLE_CALENDAR_ID,
+                    body=event
+                ).execute()
+                
+                print(f"Google Calendar event created: {created_event.get('htmlLink')}")
+                # Optionally, save the calendar event ID to Firestore for future updates/cancellations
+                db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id).update({
+                    'calendarEventId': created_event.get('id')
+                })
+                db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings').document(booking_id).update({
+                    'calendarEventId': created_event.get('id')
+                })
+
+            except HttpError as error:
+                print(f"An error occurred with Google Calendar API: {error}")
+                # You might want to return a 500 here or log more severely
+            except Exception as e:
+                print(f"Unexpected error during Google Calendar event creation: {e}")
+        else:
+            print("Google Calendar service not available. Skipping event creation.")
+
         # Send email to client
         client_subject = f"Your DJ Studio Booking Confirmation (ID: {booking_id})"
         client_html_body = get_email_template_client(full_booking_details)
@@ -381,7 +495,7 @@ def confirm_booking():
             # We replace 'api/' to get to the root of the frontend application.
             # For this to work correctly when deployed to Render, your React app's base URL
             # needs to be reachable directly via the public URL.
-        
+            
         admin_html_body = get_email_template_admin(full_booking_details, payment_confirm_link)
         send_email(ADMIN_EMAIL, admin_subject, admin_html_body)
 
@@ -472,35 +586,55 @@ def update_user_profile():
 @app.route('/api/cancel-calendar-event', methods=['DELETE'])
 def cancel_calendar_event():
     """
-    Placeholder endpoint for canceling Google Calendar events.
-    This functionality is not fully implemented on the backend as it requires
-    Google Calendar API integration and OAuth setup, which is beyond
-    the scope of basic Firebase authentication provided by Canvas.
-    It will simply return a success message for now.
+    Endpoint for canceling Google Calendar events.
+    This now uses the Google Calendar API.
     """
     try:
         claims = verify_token(request)
         user_id = claims['user_id']
         data = request.get_json()
         calendar_event_id = data.get('calendarEventId')
+        booking_id = data.get('bookingId') # Also pass bookingId to update Firestore
 
         if not calendar_event_id:
             return jsonify({"error": "calendarEventId is missing"}), 400
+        if not booking_id:
+            return jsonify({"error": "bookingId is missing"}), 400
 
-        print(f"Admin {user_id} requested to cancel calendar event: {calendar_event_id}. (Backend placeholder)")
-        # --- Placeholder for actual Google Calendar API deletion logic ---
-        # In a real application, you would use google-api-python-client
-        # to delete the event from the shared Google Calendar.
-        # This would involve:
-        # 1. Getting authenticated Google Calendar API service instance (OAuth 2.0).
-        # 2. Calling service.events().delete(calendarId='primary', eventId=calendar_event_id).execute()
-        # ------------------------------------------------------------------
+        if calendar_service:
+            try:
+                # Delete the event from the shared Google Calendar
+                calendar_service.events().delete(calendarId=GOOGLE_CALENDAR_ID, eventId=calendar_event_id).execute()
+                print(f"Google Calendar event {calendar_event_id} deleted by admin {user_id}.")
 
-        return jsonify({"message": f"Calendar event {calendar_event_id} cancellation simulated."}), 200
+                # Optionally, remove the calendarEventId from Firestore
+                db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id).update({
+                    'calendarEventId': firestore.DELETE_FIELD
+                })
+                # Find the original user ID for the booking to update their private record
+                booking_snap = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id).get()
+                if booking_snap.exists:
+                    original_user_id = booking_snap.to_dict().get('userId')
+                    if original_user_id:
+                        db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{original_user_id}/bookings').document(booking_id).update({
+                            'calendarEventId': firestore.DELETE_FIELD
+                        })
+
+                return jsonify({"message": f"Calendar event {calendar_event_id} cancelled successfully."}), 200
+            except HttpError as error:
+                print(f"An error occurred with Google Calendar API during deletion: {error}")
+                return jsonify({"error": f"Failed to cancel calendar event: {error}"}), 500
+            except Exception as e:
+                print(f"Unexpected error during Google Calendar event cancellation: {e}")
+                return jsonify({"error": f"Failed to cancel calendar event: {e}"}), 500
+        else:
+            print("Google Calendar service not available. Skipping event cancellation.")
+            return jsonify({"message": f"Calendar event {calendar_event_id} cancellation simulated (Calendar service not available)."}), 200
+
     except ValueError as e:
         return jsonify({"error": str(e)}), 401
     except Exception as e:
-        print(f"Error in cancel_calendar_event (simulated): {e}")
+        print(f"Error in cancel_calendar_event: {e}")
         return jsonify({"error": "Failed to simulate calendar event cancellation."}), 500
 
 
@@ -580,4 +714,3 @@ if __name__ == '__main__':
     # This is for local development only. Render will run your app using Gunicorn or similar.
     # Set host to '0.0.0.0' to make it accessible outside localhost in some environments.
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
-
