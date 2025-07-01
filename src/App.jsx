@@ -3,6 +3,10 @@
 // Import necessary React hooks
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 
+// Import Moment.js for date/time handling
+import moment from 'moment';
+import 'moment-timezone'; // Also import moment-timezone
+
 // Import Firebase and Firestore modules
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
@@ -11,9 +15,12 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
 import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration (Client-Side) ---
-// This config is still needed for your frontend to directly interact with Firebase Auth and Firestore
-const APP_ID_FOR_FIRESTORE_PATH = 'booking-app-1af02';
+// --- Firebase Configuration (using global variables from Canvas and user-provided config) ---
+// These variables are provided by the Canvas environment.
+const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// User-provided Firebase config - this is the definitive configuration
 const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
     authDomain: "booking-app-1af02.firebaseapp.com",
@@ -23,11 +30,12 @@ const FIREBASE_CONFIG = {
     appId: "1:909871533345:web:939fa5b6c8203ad4308260",
     measurementId: "G-NF4XH5S2QC"
 };
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = null; // Canvas-specific, leave as null for GitHub Pages
 
 // --- Backend API Base URL ---
-// IMPORTANT: Replace 'YOUR_RENDER_PYTHON_BACKEND_URL_HERE' with your actual Render URL.
-const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com'; // e.g., 'https://phyon-back-end.onrender.com'
+// IMPORTANT: Replace this with your actual Render backend URL when deployed!
+// For local development, it might be http://localhost:5000
+// For Render, it will be something like https://bookingapp-xxxx.onrender.com
+const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com'; // Updated to Render URL
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
@@ -63,22 +71,29 @@ function BookingApp() {
     // UI state
     const [selectedDate, setSelectedDate] = useState('');
     const [selectedTime, setSelectedTime] = useState('');
-    const [duration, setDuration] = useState(2);
+    const [duration, setDuration] = useState(2); // Changed initial duration to 2 hours
     const [selectedEquipment, setSelectedEquipment] = useState([]);
     const [bookings, setBookings] = useState([]);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [currentBooking, setCurrentBooking] = useState(null);
     const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash');
     const [showPaymentSimulationModal, setShowPaymentSimulationModal] = useState(false);
+    const [paymentConfirmMessage, setPaymentConfirmMessage] = useState(null); // New state for payment confirmation messages
 
     // Edit/Cancel specific state
     const [editingBookingId, setEditingBookingId] = useState(null);
     const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
     const [bookingToDelete, setBookingToDelete] = useState(null);
 
+    // Conflict Check state
+    const [showConflictModal, setShowConflictModal] = useState(false);
+    const [conflictError, setConflictError] = useState(null);
+    const [conflictingSlots, setConflictingSlots] = useState([]);
+    const [bookedSlotsForDate, setBookedSlotsForDate] = useState([]); // Stores all booked slots for the selected date
+
     // Firebase state
     const [userId, setUserId] = useState(null);
-    const [userName, setUserName] = useState(''); // Store user's display name
+    const [userName, setUserName] = useState(''); // New: Store user's display name
     const [firebaseAppInstance, setFirebaseAppInstance] = useState(null);
     const [dbInstance, setDbInstance] = useState(null);
     const [authInstance, setAuthInstance] = useState(null);
@@ -104,54 +119,84 @@ function BookingApp() {
 
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
-        try {
-            console.log("Initializing Firebase app...");
-            const app = initializeApp(FIREBASE_CONFIG);
-            const db = getFirestore(app);
-            const auth = getAuth(app);
+        // Log the start of the initialization attempt
+        console.log("EFFECT 1: Starting Firebase initialization attempt...");
+        console.log("FIREBASE_CONFIG provided:", FIREBASE_CONFIG);
 
-            setFirebaseAppInstance(app);
-            setDbInstance(db);
-            setAuthInstance(auth);
-            console.log("Firebase app, DB, Auth instances set.");
+        // Only initialize if firebaseAppInstance is null to prevent re-initialization
+        // This check is important for React's StrictMode which might run effects twice.
+        if (!firebaseAppInstance) {
+            try {
+                console.log("Attempting to call initializeApp...");
+                const app = initializeApp(FIREBASE_CONFIG);
+                const db = getFirestore(app);
+                const auth = getAuth(app);
 
-        } catch (e) {
-            console.error("Firebase Initialization Error:", e);
-            setError(`Firebase Initialization Error: ${e.message}`);
-            setIsLoadingAuth(false);
+                setFirebaseAppInstance(app);
+                setDbInstance(db);
+                setAuthInstance(auth);
+                console.log("Firebase app, DB, Auth instances set successfully in state.");
+
+                // Attempt to sign in with custom token if available
+                if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
+                    console.log("Attempting sign-in with custom token...");
+                    signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS)
+                        .then(() => console.log("Signed in with custom token."))
+                        .catch((error) => {
+                            console.error("Error signing in with custom token:", error);
+                            // Fallback to anonymous sign-in if custom token fails
+                            console.log("Falling back to anonymous sign-in...");
+                            signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                        });
+                } else {
+                    // If no custom token, sign in anonymously
+                    console.log("No custom token, attempting anonymous sign-in...");
+                    signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                }
+
+            } catch (e) {
+                console.error("Firebase Initialization Error (caught in useEffect):", e);
+                setError(`Firebase Initialization Error: ${e.message}`);
+                setAuthError(`Firebase Initialization Failed: ${e.message}`); // Set auth error specifically
+                setIsLoadingAuth(false); // Ensure loading state is false even on error
+            }
+        } else {
+            console.log("Firebase app already initialized, skipping EFFECT 1.");
         }
-    }, []);
+    }, [firebaseAppInstance]); // Dependency on firebaseAppInstance ensures it only runs once
+
 
     // --- EFFECT 2: Handle Firebase Authentication State & User Profile ---
     useEffect(() => {
+        // Depend on both authInstance and dbInstance to ensure they are available
         if (!authInstance || !dbInstance) {
-            console.log("Auth or DB instance not ready, skipping auth state listener.");
+            console.log("EFFECT 2: Auth or DB instance not ready, skipping auth state listener setup.");
             return;
         }
 
-        console.log("Setting up auth state listener...");
+        console.log("EFFECT 2: Setting up auth state listener...");
         const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
+            console.log("Auth state changed callback triggered. User:", user ? user.uid : "null");
             if (user) {
                 setUserId(user.uid);
                 setAuthError(null);
                 setShowAuthModal(false);
 
-                // --- Fetch/Create User Profile from Firestore ---
+                // --- Fetch/Create User Profile ---
                 try {
                     setProfileLoading(true);
                     setProfileError(null);
-                    // Use the same path as in your backend and security rules
                     const userProfileDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
                     const userProfileSnap = await getDoc(userProfileDocRef);
 
-                    let displayNameToUse = user.displayName || user.email; // Default from Auth or email
+                    let displayNameToUse = user.displayName || user.email;
                     if (userProfileSnap.exists()) {
                         const profileData = userProfileSnap.data();
-                        displayNameToUse = profileData.displayName || displayNameToUse; // Prefer Firestore name
+                        displayNameToUse = profileData.displayName || displayNameToUse;
                         setUserName(displayNameToUse);
-                        setNewDisplayName(displayNameToUse); // Set for profile modal
+                        setNewDisplayName(displayNameToUse);
+                        console.log("User profile loaded from Firestore.");
                     } else {
-                        // Create a new profile document if it doesn't exist using the Auth display name
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
                             displayName: displayNameToUse,
@@ -166,32 +211,51 @@ function BookingApp() {
                 } catch (profileFetchError) {
                     console.error("Error fetching/creating user profile:", profileFetchError);
                     setProfileError(`Failed to load profile: ${profileFetchError.message}`);
-                    setUserName(user.uid); // Fallback to UID if profile fails
+                    setUserName(user.uid);
                 } finally {
                     setProfileLoading(false);
                 }
 
             } else {
-                console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
-                setUserId(null);
-                setUserName(''); // Clear name on logout
+                console.log("Auth state changed: User is signed out.");
+                // If user signs out, attempt anonymous sign-in again to maintain a session
+                try {
+                    console.log("Attempting anonymous sign-in after logout...");
+                    await signInAnonymously(authInstance);
+                    console.log("Signed in anonymously after logout.");
+                } catch (anonSignInError) {
+                    console.error("Error signing in anonymously after logout:", anonSignInError);
+                    setAuthError(`Authentication failed after logout: ${anonSignInError.message}`);
+                }
+                setUserId(null); // Will be updated by the anonymous sign-in if successful
+                setUserName('');
                 setNewDisplayName('');
-                setAuthError(null);
+                setAuthError(null); // Clear auth error for new session
                 setProfileError(null);
             }
-            setIsLoadingAuth(false);
+            setIsLoadingAuth(false); // Ensure loading state is false after auth check
+            console.log("EFFECT 2: Finished processing auth state change. isLoadingAuth set to false.");
         });
 
         return () => {
-            console.log("Cleaning up auth state listener.");
+            console.log("EFFECT 2: Cleaning up auth state listener.");
             unsubscribe();
         };
     }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
 
-    // --- EFFECT 3: Firestore Bookings Real-time Listener ---
+    // --- EFFECT 3: Firestore Bookings Real-time Listener (User-specific) ---
     useEffect(() => {
+        // Log current states before deciding to skip or proceed
+        console.log("EFFECT 3: Firestore listener check:", {
+            dbInstanceReady: !!dbInstance,
+            userIdValue: userId, // Can be null or a string
+            isLoadingAuthStatus: isLoadingAuth,
+            authErrorStatus: authError
+        });
+
+        // Ensure all prerequisites are met before attempting Firestore operations
         if (!dbInstance || userId === null || isLoadingAuth || authError) {
-            console.log("Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
+            console.log("EFFECT 3: Firestore listener skipped: Prerequisites not met.");
             setBookings([]);
             setIsLoadingBookings(false);
             return;
@@ -201,13 +265,13 @@ function BookingApp() {
         setError(null);
 
         const collectionPath = `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`;
-        console.log("Attempting to listen to Firestore collection:", collectionPath, "with userId:", userId);
+        console.log("EFFECT 3: Attempting to listen to user-specific Firestore collection:", collectionPath, "with userId:", userId);
 
         const bookingsCollectionRef = collection(dbInstance, collectionPath);
         const q = query(bookingsCollectionRef);
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            console.log("Firestore snapshot received.");
+            console.log("EFFECT 3: User-specific Firestore snapshot received.");
             const fetchedBookings = [];
             snapshot.forEach((doc) => {
                 fetchedBookings.push({ id: doc.id, ...doc.data() });
@@ -215,33 +279,194 @@ function BookingApp() {
             fetchedBookings.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
             setBookings(fetchedBookings);
             setIsLoadingBookings(false);
-            console.log("Bookings updated:", fetchedBookings.length, "bookings.");
+            console.log("EFFECT 3: User-specific bookings updated:", fetchedBookings.length, "bookings.");
         }, (firestoreError) => {
-            console.error("Firestore Error fetching bookings:", firestoreError);
-            setError(`Failed to load bookings: ${firestoreError.message}`);
+            console.error("EFFECT 3: User-specific Firestore Error fetching bookings:", firestoreError);
+            setError(`Failed to load your bookings: ${firestoreError.message}`);
             setIsLoadingBookings(false);
         });
 
         return () => {
-            console.log("Cleaning up Firestore listener.");
+            console.log("EFFECT 3: Cleaning up user-specific Firestore listener.");
             unsubscribe();
         };
     }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
 
+    // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend (for conflict check) ---
+    useEffect(() => {
+        const fetchBookedSlots = async () => {
+            // Ensure userId and authInstance.currentUser are available before attempting to get token
+            if (!selectedDate || !userId || !authInstance || !authInstance.currentUser || isLoadingAuth) {
+                setBookedSlotsForDate([]); // Clear previous booked slots if no date or user
+                return;
+            }
+
+            try {
+                // Ensure ID token is available for the backend call
+                const idToken = await authInstance.currentUser.getIdToken();
+                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
+                    headers: {
+                        'Authorization': `Bearer ${idToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to fetch booked slots.');
+                }
+
+                const data = await response.json();
+                setBookedSlotsForDate(data.bookedSlots);
+                console.log(`Fetched booked slots for ${selectedDate}:`, data.bookedSlots);
+            } catch (fetchError) {
+                console.error("Error fetching booked slots:", fetchError);
+                // set Error without showing modal, as this is a background fetch
+            }
+        };
+
+        fetchBookedSlots();
+    }, [selectedDate, userId, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
+
+    // --- EFFECT 5: Handle Payment Confirmation Link from Admin Email ---
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const bookingIdFromUrl = urlParams.get('bookingId');
+
+        const confirmPaymentFromUrl = async () => {
+            if (!bookingIdFromUrl || !authInstance || !authInstance.currentUser) {
+                // If no bookingId or user not logged in yet, wait or do nothing
+                return;
+            }
+            // Clear URL parameter after processing to prevent re-triggering
+            history.replaceState({}, document.title, window.location.pathname);
+
+            setPaymentConfirmMessage('Confirming payment...');
+            try {
+                const idToken = await authInstance.currentUser.getIdToken();
+                const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-payment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${idToken}`
+                    },
+                    body: JSON.stringify({ bookingId: bookingIdFromUrl })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    setPaymentConfirmMessage(data.message || 'Payment confirmed successfully!');
+                } else {
+                    throw new Error(data.error || 'Failed to confirm payment.');
+                }
+            } catch (err) {
+                console.error("Error confirming payment from URL:", err);
+                setPaymentConfirmMessage(`Error confirming payment: ${err.message}`);
+            } finally {
+                // Optionally clear message after a few seconds
+                setTimeout(() => setPaymentConfirmMessage(null), 5000);
+            }
+        };
+
+        // Only attempt to confirm payment if a bookingId is present in the URL
+        // and Firebase auth is ready (user is logged in or will be prompted to log in)
+        if (bookingIdFromUrl && authInstance && !isLoadingAuth) {
+             // If user is not yet logged in, the onAuthStateChanged listener will eventually
+             // log them in, and this useEffect will re-run.
+            if (authInstance.currentUser) {
+                confirmPaymentFromUrl();
+            } else {
+                // If not logged in, prompt for login if needed.
+                // For simplicity, we just rely on onAuthStateChanged to eventually sign in.
+                console.log("Booking ID in URL, but user not logged in. Waiting for auth.");
+            }
+        }
+    }, [authInstance, isLoadingAuth, BACKEND_API_BASE_URL]); // Depend on authInstance and isLoadingAuth
+
+
     // Memoized values
     const today = useMemo(() => new Date().toISOString().split('T')[0], []);
+    
+    // Time slots from 9 AM (hour 9) to 4 PM (hour 16), which is the last START time
     const timeSlots = useMemo(() => {
         const slots = [];
-        for (let hour = 9; hour <= 23; hour++) {
+        // Loop from 9 AM (hour 9) to 4 PM (hour 16) as the last *start* time
+        for (let hour = 9; hour <= 16; hour++) {
             const time24 = `${hour.toString().padStart(2, '0')}:00`;
             const time12 = hour > 12 ? `${hour - 12}:00 PM` : hour === 12 ? '12:00 PM' : `${hour}:00 AM`;
             slots.push({ value: time24, label: time12 });
         }
         return slots;
     }, []);
+
+    // Prepare time slots for display, including disabled status
+    const availableTimeSlotsForDisplay = useMemo(() => {
+        const currentHour = new Date().getHours();
+        const currentMinute = new Date().getMinutes();
+        const todayDate = new Date().toISOString().split('T')[0];
+        const closingTime = moment(`${selectedDate} 18:00`, 'YYYY-MM-DD HH:mm', true); // Studio closes at 6 PM (18:00)
+
+        return timeSlots.map(slot => {
+            const slotStartMoment = moment(`${selectedDate} ${slot.value}`, 'YYYY-MM-DD HH:mm', true);
+            const proposedEndMoment = slotStartMoment.clone().add(duration, 'hours');
+            
+            let isDisabled = false;
+            let disabledReason = '';
+
+            // 1. Check if proposed booking exceeds closing time (6 PM)
+            if (proposedEndMoment.isAfter(closingTime)) {
+                isDisabled = true;
+                disabledReason = `Ends after ${formatTime('18:00')}`;
+            }
+
+            // 2. Disable past times on current day
+            if (selectedDate === todayDate) {
+                const slotHour = parseInt(slot.value.split(':')[0]);
+                const slotMinute = parseInt(slot.value.split(':')[1]);
+                if (slotHour < currentHour || (slotHour === currentHour && slotMinute <= currentMinute)) {
+                    isDisabled = true;
+                    disabledReason = 'Past time';
+                }
+            }
+
+            // 3. Check for overlap with any booked slot (if not already disabled)
+            if (!isDisabled && bookedSlotsForDate.length > 0) {
+                const isConflicting = bookedSlotsForDate.some(bookedSlot => {
+                    const bookedUserTimeZone = bookedSlot.userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    const bookedStartMoment = moment.tz(`${bookedSlot.date} ${bookedSlot.time}`, bookedUserTimeZone);
+                    const bookedEndMoment = bookedStartMoment.clone().add(bookedSlot.duration, 'hours');
+
+                    // If editing an existing booking, don't consider it a conflict with itself
+                    if (editingBookingId && bookedSlot.id === editingBookingId) {
+                        return false;
+                    }
+                    
+                    return slotStartMoment.isBefore(bookedEndMoment) && proposedEndMoment.isAfter(bookedStartMoment);
+                });
+                if (isConflicting) {
+                    isDisabled = true;
+                    disabledReason = 'Already booked';
+                }
+            }
+            return {
+                value: slot.value,
+                label: slot.label + (isDisabled ? ` (${disabledReason})` : ''),
+                disabled: isDisabled
+            };
+        });
+    }, [selectedDate, bookedSlotsForDate, timeSlots, duration, editingBookingId, today]);
+
+
     const calculateTotal = useCallback(() => ROOM_RATE_PER_HOUR * duration, [duration]);
     const players = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'player'), []);
     const mixers = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'mixer'), []);
+
+    // --- handleDateChange function (ADDED) ---
+    const handleDateChange = useCallback((e) => {
+        const newDate = e.target.value;
+        setSelectedDate(newDate);
+        // Reset selected time if the date changes to avoid invalid combinations
+        setSelectedTime('');
+    }, []);
 
     // --- toggleEquipment function ---
     const toggleEquipment = useCallback((equipment) => {
@@ -315,13 +540,15 @@ function BookingApp() {
         try {
             await signOut(authInstance);
             setUserId(null);
-            setUserName(''); // Clear name on logout
+            setUserName('');
+            setNewDisplayName('');
             setBookings([]);
+            setBookedSlotsForDate([]); // Clear booked slots on logout
             console.log("User logged out.");
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
-            setDuration(2);
+            setDuration(2); // Reset duration to default minimum
             setSelectedEquipment([]);
             setSelectedPaymentMethod('cash');
 
@@ -380,9 +607,9 @@ function BookingApp() {
             setError('Please select both date and time to proceed with booking.');
             return;
         }
-        if (!userId || !authInstance || isLoadingAuth || profileLoading || authError || profileError) {
+        if (!userId || !authInstance || !authInstance.currentUser || isLoadingAuth || profileLoading || authError || profileError) {
             setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, authInstance, isLoadingAuth, profileLoading, authError, profileError });
+            console.error("Booking attempted when app state not ready.", { userId, authInstance, currentUser: authInstance?.currentUser, isLoadingAuth, profileLoading, authError, profileError });
             return;
         }
 
@@ -480,7 +707,7 @@ function BookingApp() {
 
     // --- Confirm Delete Action - NOW CALLS BACKEND ---
     const confirmDeleteBooking = useCallback(async () => {
-        if (!bookingToDelete || !dbInstance || !userId || !authInstance) return;
+        if (!bookingToDelete || !dbInstance || !userId || !authInstance || !authInstance.currentUser) return;
 
         setIsLoadingBookings(true);
         setError(null);
@@ -599,6 +826,15 @@ function BookingApp() {
                     </div>
                 )}
 
+                {/* Payment Confirmation Message Display */}
+                {paymentConfirmMessage && (
+                    <div className={`px-4 py-3 rounded-xl relative mb-4 ${
+                        paymentConfirmMessage.includes('Error') ? 'bg-red-800 text-white' : 'bg-green-800 text-white'
+                    }`} role="alert">
+                        <span className="block sm:inline">{paymentConfirmMessage}</span>
+                    </div>
+                )}
+
                 {/* Main Booking Card: Date, Time & Summary */}
                 <div ref={bookingFormRef} className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
                     <div className="grid md:grid-cols-2 gap-8">
@@ -617,7 +853,7 @@ function BookingApp() {
                                     type="date"
                                     min={today}
                                     value={selectedDate}
-                                    onChange={(e) => setSelectedDate(e.target.value)}
+                                    onChange={handleDateChange} // Corrected: using handleDateChange
                                     className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
                                 />
                             </div>
@@ -633,12 +869,20 @@ function BookingApp() {
                                     className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
                                 >
                                     <option value="">Choose a time...</option>
-                                    {timeSlots.map(slot => (
-                                        <option key={slot.value} value={slot.value}>
+                                    {availableTimeSlotsForDisplay.map(slot => (
+                                        <option
+                                            key={slot.value}
+                                            value={slot.value}
+                                            disabled={slot.disabled} // Use the disabled property
+                                            className={slot.disabled ? 'text-gray-500 bg-gray-700' : ''} // Apply muted style
+                                        >
                                             {slot.label}
                                         </option>
                                     ))}
                                 </select>
+                                {selectedDate && availableTimeSlotsForDisplay.every(slot => slot.disabled) && (
+                                    <p className="text-red-300 text-sm mt-2">No available slots for this date with the selected duration.</p>
+                                )}
                             </div>
 
                             <div>
@@ -651,12 +895,11 @@ function BookingApp() {
                                     onChange={(e) => setDuration(parseInt(e.target.value))}
                                     className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
                                 >
-                                    <option value={1}>1 hour</option>
-                                    <option value={2}>2 hours (Default)</option>
+                                    {/* Changed options for minimum duration of 2 hours */}
+                                    <option value={2}>2 hours</option>
                                     <option value={3}>3 hours</option>
                                     <option value={4}>4 hours</option>
-                                    <option value={6}>6 hours</option>
-                                    <option value={8}>8 hours</option>
+                                    {/* No option for 6 or 8 hours as max time is 6 PM and min duration 2 hours, last booking at 4pm */}
                                 </select>
                             </div>
                         </div>
@@ -830,9 +1073,9 @@ function BookingApp() {
                 <div className="text-center">
                     <button
                         onClick={handleBooking}
-                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId}
+                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId || (selectedDate && availableTimeSlotsForDisplay.find(slot => slot.value === selectedTime)?.disabled)}
                         className={`px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
-                            selectedDate && selectedTime && !isLoadingBookings && userId
+                            (selectedDate && selectedTime && !isLoadingBookings && userId && !(selectedDate && availableTimeSlotsForDisplay.find(slot => slot.value === selectedTime)?.disabled))
                                 ? 'bg-gradient-to-r from-orange-600 to-orange-800 text-white hover:from-orange-700 hover:to-orange-900 shadow-lg hover:shadow-xl transform hover:scale-105'
                                 : 'bg-gray-600 text-gray-400 cursor-not-allowed'
                         }`}
@@ -851,6 +1094,9 @@ function BookingApp() {
                                 setSelectedEquipment([]);
                                 setSelectedPaymentMethod('cash');
                                 setError(null);
+                                setConflictError(null);
+                                setConflictingSlots([]);
+                                setShowConflictModal(false);
                             }}
                             className="ml-4 px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
                         >
@@ -860,76 +1106,79 @@ function BookingApp() {
                 </div>
 
                 {/* Recent Bookings Section */}
-                {userId && (isLoadingBookings && bookings.length === 0 && !error) ? (
-                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
-                        Loading bookings...
-                    </div>
-                ) : (userId && bookings.length > 0) && (
-                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 border border-gray-700">
-                        <h2 className="text-2xl font-semibold text-orange-300 mb-6">
-                            📋 Recent Bookings
-                        </h2>
-                        <div className="space-y-4">
-                            {bookings.map(booking => (
-                                <div key={booking.id} className="bg-gray-700 rounded-lg p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-600">
-                                    <div className="flex-grow mb-4 sm:mb-0">
-                                        <p className="font-medium text-gray-100">Booking ID: <span className="font-mono text-xs text-gray-400">{booking.id}</span></p>
-                                        <p className="text-sm text-gray-300">
-                                            {formatDate(booking.date)} at {formatTime(booking.time)} ({booking.duration} hours)
-                                        </p>
-                                        <p className="text-xs text-gray-400">
-                                            Equipment: {booking.equipment && booking.equipment.length > 0 ? booking.equipment.map(e => e.name).join(', ') : 'None selected'}
-                                        </p>
-                                        <p className="text-xs text-gray-400 mt-1">
-                                            Payment: {booking.paymentMethod === 'online' ? 'Online' : 'Cash'}
-                                            <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                                booking.paymentStatus === 'paid' ? 'bg-green-700 text-green-200' : 'bg-yellow-700 text-yellow-200'
-                                            }`}>
-                                                {booking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
-                                            </span>
-                                        </p>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="font-bold text-orange-400">{formatIDR(booking.total)}</p>
-                                        <p className="text-xs text-gray-400">
-                                            Booked by: <span className="font-semibold text-orange-200">{booking.userName || (booking.userId ? booking.userId.substring(0, 8) + '...' : 'N/A')}</span>
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-col sm:flex-row gap-2 mt-2 sm:mt-0 sm:ml-4">
-                                        {/* Only show edit/cancel if current user is the booking owner */}
-                                        {userId === booking.userId && (
-                                            <>
-                                                <button
-                                                    onClick={() => handleEditBooking(booking)}
-                                                    className="px-4 py-2 bg-orange-500 text-white rounded-xl text-sm hover:bg-orange-600 transition duration-200"
-                                                >
-                                                    Edit
-                                                </button>
-                                                <button
-                                                    onClick={() => handleCancelBooking(booking)}
-                                                    className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition duration-200"
-                                                >
-                                                    Cancel
-                                                </button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
+                {userId ? ( // Only show this section if a user is logged in
+                    isLoadingBookings && bookings.length === 0 && !error ? (
+                        <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
+                            Loading bookings...
                         </div>
-                    </div>
-                )}
-                {/* Message if no bookings and user is logged in */}
-                {userId && !isLoadingBookings && bookings.length === 0 && !error && (
-                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
-                        No recent bookings found. Make your first booking above!
-                    </div>
-                )}
-                {/* Message if user is not logged in */}
-                {!userId && (
-                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
-                        Sign in to view and make bookings.
-                    </div>
+                    ) : bookings.length > 0 ? (
+                        <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 border border-gray-700">
+                            <h2 className="text-2xl font-semibold text-orange-300 mb-6">
+                                📋 Recent Bookings
+                            </h2>
+                            <div className="space-y-4">
+                                {bookings.map(booking => (
+                                    <div key={booking.id} className="bg-gray-700 rounded-lg p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-600">
+                                        <div className="flex-grow mb-4 sm:mb-0">
+                                            <p className="font-medium text-gray-100">Booking ID: <span className="font-mono text-xs text-gray-400">{booking.id}</span></p>
+                                            <p className="text-sm text-gray-300">
+                                                {formatDate(booking.date)} at {formatTime(booking.time)} ({booking.duration} hours)
+                                            </p>
+                                            <p className="text-xs text-gray-400">
+                                                Equipment: {booking.equipment && booking.equipment.length > 0 ? booking.equipment.map(e => e.name).join(', ') : 'None selected'}
+                                            </p>
+                                            <p className="text-xs text-gray-400 mt-1">
+                                                Payment: {booking.paymentMethod === 'online' ? 'Online' : 'Cash'}
+                                                <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                                    booking.paymentStatus === 'paid' ? 'bg-green-700 text-green-200' : 'bg-yellow-700 text-yellow-200'
+                                                }`}>
+                                                    {booking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
+                                                </span>
+                                            </p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="font-bold text-orange-400">{formatIDR(booking.total)}</p>
+                                            <p className="text-xs text-gray-400">
+                                                Booked by: <span className="font-semibold text-orange-200">{booking.userName || (booking.userId ? booking.userId.substring(0, 8) + '...' : 'N/A')}</span>
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row gap-2 mt-2 sm:mt-0 sm:ml-4">
+                                            {/* Only show edit/cancel if current user is the booking owner */}
+                                            {userId === booking.userId && (
+                                                <>
+                                                    <button
+                                                        onClick={() => handleEditBooking(booking)}
+                                                        className="px-4 py-2 bg-orange-500 text-white rounded-xl text-sm hover:bg-orange-600 transition duration-200"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleCancelBooking(booking)}
+                                                        className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition duration-200"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        !isLoadingBookings && bookings.length === 0 && !error && (
+                            <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
+                                No recent bookings found. Make your first booking above!
+                            </div>
+                        )
+                    )
+                ) : ( // If no userId, prompt to sign in
+                    <button
+                        onClick={() => setShowAuthModal(true)}
+                        className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition duration-200 shadow-lg mt-6 block mx-auto"
+                    >
+                        Sign In / Sign Up to View Bookings
+                    </button>
                 )}
 
 
@@ -1036,6 +1285,55 @@ function BookingApp() {
                     </div>
                 )}
 
+                {/* Profile Management Modal */}
+                {showProfileModal && userId && (
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
+                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
+                                Manage Profile
+                            </h2>
+                            {profileError && (
+                                <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4 text-sm" role="alert">
+                                    {profileError}
+                                </div>
+                            )}
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-2">Display Name</label>
+                                    <input
+                                        type="text"
+                                        id="displayName"
+                                        value={newDisplayName}
+                                        onChange={(e) => setNewDisplayName(e.target.value)}
+                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
+                                        placeholder="Your Name"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-6 space-y-4">
+                                <button
+                                    onClick={handleUpdateProfile}
+                                    disabled={profileLoading}
+                                    className="w-full px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition duration-200"
+                                >
+                                    {profileLoading ? 'Updating...' : 'Update Profile'}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowProfileModal(false);
+                                        setProfileError(null);
+                                        setNewDisplayName(userName);
+                                    }}
+                                    className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+
                 {/* Payment Simulation Modal */}
                 {showPaymentSimulationModal && (
                     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
@@ -1048,7 +1346,13 @@ function BookingApp() {
                             </p>
                             <div className="flex justify-center gap-4">
                                 <button
-                                    onClick={() => handleBooking()} // Call handleBooking again to trigger backend call with 'paid' status
+                                    onClick={() => {
+                                        setShowPaymentSimulationModal(false);
+                                        // Directly call handleBooking to re-trigger the backend call
+                                        // with the implicit payment status (which will be 'pending' from selectedPaymentMethod)
+                                        // The backend will then update it to 'paid' if the confirmation logic is there.
+                                        handleBooking();
+                                    }}
                                     className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
                                 >
                                     Confirm Payment (Simulated)
@@ -1086,6 +1390,70 @@ function BookingApp() {
                                     className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
                                 >
                                     No, Keep Booking
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Conflict Modal */}
+                {showConflictModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
+                            <div className="text-center">
+                                <div className="text-6xl mb-4">⚠️</div>
+                                <h2 className="text-2xl font-bold text-red-400 mb-4">
+                                    Booking Conflict!
+                                </h2>
+                                {conflictError && (
+                                    <p className="text-gray-300 mb-4">{conflictError}</p>
+                                )}
+                                {conflictingSlots.length > 0 && (
+                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
+                                        <p className="font-semibold mb-2">Conflicting bookings:</p>
+                                        <ul className="list-disc list-inside space-y-1">
+                                            {conflictingSlots.map((slot, index) => (
+                                                <li key={index}>
+                                                    {formatTime(slot.time)} for {slot.duration} hours (by {slot.userName})
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                {availableTimeSlotsForDisplay.length > 0 && (
+                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
+                                        <p className="font-semibold mb-2">Available slots for {formatDate(selectedDate)} (Duration: {duration}h):</p>
+                                        <div className="flex flex-wrap gap-2 justify-center">
+                                            {availableTimeSlotsForDisplay.map(slot => (
+                                                <span
+                                                    key={slot.value}
+                                                    onClick={() => {
+                                                        if (!slot.disabled) { // Only allow selection if not disabled
+                                                            setSelectedTime(slot.value);
+                                                            setShowConflictModal(false); // Close modal and re-attempt booking
+                                                            setConflictError(null);
+                                                            setConflictingSlots([]);
+                                                        }
+                                                    }}
+                                                    // Add class for disabled slots in modal for consistency
+                                                    className={`px-3 py-1 rounded-full text-sm cursor-pointer transition duration-200 ${
+                                                        slot.disabled ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-green-700 text-green-100 hover:bg-green-600'
+                                                    }`}
+                                                >
+                                                    {slot.label}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {selectedDate && availableTimeSlotsForDisplay.every(slot => slot.disabled) && (
+                                     <p className="text-orange-300 text-sm mt-2">No alternative available slots found for this date and duration.</p>
+                                )}
+                                <button
+                                    onClick={() => { setShowConflictModal(false); setConflictError(null); setConflictingSlots([]); }}
+                                    className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 transition duration-200"
+                                >
+                                    Close
                                 </button>
                             </div>
                         </div>
