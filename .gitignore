@@ -27,6 +27,7 @@ dist-ssr
 
 # Environment variables for backend
 /standalone-backend/.env
+/phyton/get_refresh_token.py
 
 # Node modules
 /standalone-backend/node_modules
