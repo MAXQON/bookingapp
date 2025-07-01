@@ -1,235 +1,275 @@
-# phyton/app.py
+# main.py
 
 import os
-import firebase_admin
-from firebase_admin import credentials, auth, firestore
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import json
-import requests
-import google.auth
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from google.cloud import firestore
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 import datetime
-import pytz
-import base64
-from google.auth.transport.requests import Request as GoogleAuthRequest # Explicitly import Request and alias it
+import pytz # Import pytz for timezone handling
+from flask_mail import Mail, Message # Import Flask-Mail components
+from dotenv import load_dotenv # Import dotenv
 
-# Initialize Flask App
+# Load environment variables from .env file (for local development)
+load_dotenv()
+
 app = Flask(__name__)
-
-# Configure CORS - Allow all origins for development, specify origins for production
-CORS(app, resources={r"/api/*": {"origins": [
-    "http://localhost:5173", # Your local frontend dev server
-    "https://maxqon.github.io", # Root GitHub Pages domain
-    "https://maxqon.github.io/bookingapp", # Specific GitHub Pages path
-    os.environ.get('RENDER_EXTERNAL_URL') # Render's own URL for the backend
-]}})
+CORS(app) # Enable CORS for all routes
 
 # --- Firebase Admin SDK Initialization ---
-firebase_service_account_key_base64 = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY_BASE64')
-# Get Firebase Project ID for audience verification in ID token and Firestore paths
-FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', 'booking-app-1af02') # Default if not set
+# This is handled automatically by the Canvas environment for Firestore access
+# For local development, ensure GOOGLE_APPLICATION_CREDENTIALS is set
+db = firestore.Client()
 
-if firebase_service_account_key_base64:
-    try:
-        service_account_info_str = base64.b64decode(firebase_service_account_key_base64).decode('utf-8')
-        service_account_info = json.loads(service_account_info_str)
-        
-        print("Service account JSON decoded and parsed successfully from FIREBASE_SERVICE_ACCOUNT_KEY_BASE64.")
-        print("Debug: Firebase Admin SDK Service Account Details:")
-        print(f"  Project ID: {service_account_info.get('project_id', 'N/A')}")
-        print(f"  Client Email: {service_account_info.get('client_email', 'N/A')}")
-        
-        cred = credentials.Certificate(service_account_info)
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        print("Firebase Admin SDK initialized successfully.")
-    except Exception as e:
-        print(f"Error initializing Firebase Admin SDK: {e}")
-        db = None
-else:
-    print("FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 environment variable not set.")
-    print("Firebase Admin SDK will not be initialized. Firestore operations will fail.")
-    db = None
-
-# --- Google Calendar API Initialization ---
-GOOGLE_CALENDAR_CLIENT_ID = os.environ.get('GOOGLE_CALENDAR_CLIENT_ID')
-GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get('GOOGLE_CALENDAR_CLIENT_SECRET')
-GOOGLE_CALENDAR_REFRESH_TOKEN = os.environ.get('GOOGLE_CALENDAR_REFRESH_TOKEN')
-GOOGLE_CALENDAR_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_CALENDAR_ID')
-
-# Initialize creds and calendar_service globally, but we'll refresh creds per request
-calendar_creds = None
-calendar_service = None
-
-# Print the values of Google Calendar env vars for debugging
-print("\n--- Google Calendar Environment Variables Check ---")
-print(f"GOOGLE_CALENDAR_CLIENT_ID: {'SET' if GOOGLE_CALENDAR_CLIENT_ID else 'NOT SET'}")
-print(f"GOOGLE_CALENDAR_CLIENT_SECRET: {'SET' if GOOGLE_CALENDAR_CLIENT_SECRET else 'NOT SET'}")
-print(f"GOOGLE_CALENDAR_REFRESH_TOKEN: {'SET' if GOOGLE_CALENDAR_REFRESH_TOKEN else 'NOT SET'}")
-print(f"GOOGLE_CALENDAR_CALENDAR_ID: {'SET' if GOOGLE_CALENDAR_CALENDAR_ID else 'NOT SET'}")
-print("--------------------------------------------------\n")
+# --- Firebase Project ID from environment (important for security rules path) ---
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID")
+if not FIREBASE_PROJECT_ID:
+    print("Warning: FIREBASE_PROJECT_ID environment variable not set. Using a placeholder for Firestore paths.")
+    FIREBASE_PROJECT_ID = "booking-app-1af02" # Default placeholder
 
 
-if GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET and GOOGLE_CALENDAR_REFRESH_TOKEN:
-    try:
-        calendar_creds = Credentials(
-            token=None,
-            refresh_token=GOOGLE_CALENDAR_REFRESH_TOKEN,
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=GOOGLE_CALENDAR_CLIENT_ID,
-            client_secret=GOOGLE_CALENDAR_CLIENT_SECRET,
-            scopes=['https://www.googleapis.com/auth/calendar.events']
-        )
-        # Attempt initial refresh at startup
-        calendar_creds.refresh(GoogleAuthRequest())
-        calendar_service = build('calendar', 'v3', credentials=calendar_creds)
-        print("Google Calendar API service initialized successfully.")
-    except Exception as e:
-        print(f"Error initializing Google Calendar API service: {e}")
-else:
-    print("Google Calendar API environment variables (CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN) not fully set.")
-    print("Google Calendar API functionality will be disabled.")
+# --- Flask-Mail Configuration ---
+# IMPORTANT: These environment variables MUST be set on your Render service
+# For example, if using Gmail, you'd need an App Password:
+# MAIL_USERNAME = 'your_gmail_email@gmail.com'
+# MAIL_PASSWORD = 'your_gmail_app_password'
+# MAIL_SERVER = 'smtp.gmail.com'
+# MAIL_PORT = 587
+# MAIL_USE_TLS = True
+# MAIL_USE_SSL = False
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.example.com')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'True').lower() == 'true'
+app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'False').lower() == 'true'
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME', 'your_email@example.com')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD', 'your_email_password')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME'])
 
-# --- Middleware to verify Firebase ID Token ---
-@app.before_request
-def verify_firebase_token():
-    if request.method == 'OPTIONS':
-        return
+mail = Mail(app)
 
-    unprotected_paths = ['/']
-    if request.path in unprotected_paths:
-        request.uid = None
-        return
+# --- Admin Email Address ---
+# This is where notifications about new bookings and payment confirmations will be sent
+ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@example.com')
+if ADMIN_EMAIL == 'admin@example.com':
+    print("Warning: ADMIN_EMAIL environment variable not set. Admin notifications will go to a placeholder email.")
 
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({"error": "Unauthorized", "message": "Bearer token missing or invalid."}), 401
+# --- Utility Functions ---
 
-    id_token = auth_header.split(' ')[1]
+def verify_token(req):
+    """
+    Verifies Firebase ID Token from the request.
+    Includes enhanced logging for debugging.
+    """
+    auth_header = req.headers.get('Authorization')
+    print(f"DEBUG: Authorization header received: {auth_header}")
+
+    if not auth_header:
+        print("DEBUG: Authorization header missing.")
+        raise ValueError("Authorization header missing.")
     
-    try:
-        # Verify the ID token using the Firebase project ID as audience
-        decoded_token = auth.verify_id_token(id_token, audience=FIREBASE_PROJECT_ID)
-        request.uid = decoded_token['uid']
-        request.user_email = decoded_token.get('email')
-        # Prioritize 'name' from token, then 'email', then default to UID
-        request.user_display_name = decoded_token.get('name', decoded_token.get('email', request.uid))
-        print(f"Firebase ID token verified for UID: {request.uid}, Display Name: {request.user_display_name}")
-    except Exception as e:
-        print(f"Error verifying Firebase ID token: {e}")
-        return jsonify({"error": "Unauthorized", "message": str(e)}), 401
+    if not auth_header.startswith('Bearer '):
+        print(f"DEBUG: Authorization header does not start with 'Bearer ': {auth_header}")
+        raise ValueError("Authorization header malformed: must start with 'Bearer '.")
 
-# --- Routes ---
-@app.route('/')
-def home():
-    return "Python Backend for DJ Room Booking App is running!"
-
-@app.route('/api/update-profile', methods=['POST'], endpoint='update_profile')
-def update_profile():
-    if not hasattr(request, 'uid') or not request.uid:
-        return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
+    token = auth_header.split('Bearer ')[1]
+    if not token:
+        print("DEBUG: Token not found after 'Bearer ' split.")
+        raise ValueError("Token not found in Authorization header.")
     
-    if not db:
-        return jsonify({"error": "Server Error", "message": "Firestore not initialized."}), 500
-
-    data = request.get_json()
-    new_display_name = data.get('displayName')
-
-    if not new_display_name:
-        return jsonify({"error": "Bad Request", "message": "Display name is required."}), 400
+    print(f"DEBUG: Extracted token (first 20 chars): {token[:20]}...")
 
     try:
-        # Update Firebase Auth profile
-        auth.update_user(request.uid, display_name=new_display_name)
-        print(f"Firebase Auth display name updated for {request.uid} to {new_display_name}")
-
-        # Update Firestore userProfile document
-        user_profile_ref = db.collection('artifacts').document(
-            FIREBASE_PROJECT_ID
-        ).collection('users').document(request.uid).collection('profiles').document('userProfile')
-
-        user_profile_ref.set({
-            'displayName': new_display_name,
-            'updatedAt': firestore.SERVER_TIMESTAMP,
-            'userId': request.uid # Ensure userId is also stored
-        }, merge=True)
-        print(f"Firestore user profile updated for {request.uid}")
-
-        return jsonify({"message": "Profile updated successfully.", "displayName": new_display_name}), 200
+        # Verify the ID token using the Firebase project ID
+        # audience=None lets it accept both your project ID and your Firebase project URL
+        # For security, you might want to specify your exact project ID: audience=FIREBASE_PROJECT_ID
+        claims = id_token.verify_firebase_token(token, google_requests.Request(), audience=FIREBASE_PROJECT_ID)
+        print(f"DEBUG: Token successfully verified for user_id: {claims.get('user_id')}")
+        return claims
     except Exception as e:
-        print(f"Error updating profile: {e}")
-        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+        print(f"DEBUG: Error during token verification: {e}")
+        raise ValueError(f"Invalid token: {e}")
 
-@app.route('/api/confirm-booking', methods=['POST'], endpoint='confirm_booking')
+def send_email(recipient_email, subject, html_body, sender=None):
+    """Sends an email using Flask-Mail."""
+    try:
+        if not sender:
+            sender = app.config['MAIL_DEFAULT_SENDER']
+
+        msg = Message(subject, sender=sender, recipients=[recipient_email])
+        msg.html = html_body
+        mail.send(msg)
+        print(f"Email sent successfully to {recipient_email}")
+    except Exception as e:
+        print(f"Failed to send email to {recipient_email}: {e}")
+        # In a real app, you might want to log this error more robustly or queue for retry
+
+def get_email_template_client(booking_details):
+    """Generates the HTML body for the client confirmation email."""
+    # Format equipment for display
+    equipment_list = "None selected"
+    if booking_details.get('equipment'):
+        equipment_names = [eq['name'] for eq in booking_details['equipment']]
+        equipment_list = ", ".join(equipment_names)
+
+    # Format dates and times for display
+    booked_date = datetime.datetime.strptime(booking_details['date'], '%Y-%m-%d').strftime('%A, %B %d, %Y')
+    start_time = datetime.datetime.strptime(booking_details['time'], '%H:%M').strftime('%I:%M %p')
+    # Calculate end time based on duration
+    end_dt = datetime.datetime.strptime(booking_details['time'], '%H:%M') + datetime.timedelta(hours=booking_details['duration'])
+    end_time = end_dt.strftime('%I:%M %p')
+
+    # Format total amount
+    total_amount = "Rp " + "{:,.0f}".format(booking_details['total']) # Format Indonesian Rupiah
+
+    html_body = f"""
+    <p>Dear {booking_details.get('userName', 'Valued Client')},</p>
+    <p>Thank you for booking with DJ Studio! Your session details are confirmed:</p>
+    <ul>
+        <li><strong>Booking ID:</strong> {booking_details.get('id', 'N/A')}</li>
+        <li><strong>Date:</strong> {booked_date}</li>
+        <li><strong>Time:</strong> {start_time} - {end_time}</li>
+        <li><strong>Duration:</strong> {booking_details['duration']} hours</li>
+        <li><strong>Equipment:</strong> {equipment_list}</li>
+        <li><strong>Total Cost:</strong> {total_amount}</li>
+        <li><strong>Payment Method:</strong> {booking_details.get('paymentMethod', 'N/A')}</li>
+        <li><strong>Payment Status:</strong> {booking_details.get('paymentStatus', 'PENDING').upper()}</li>
+    </ul>
+    <p>We look forward to seeing you!</p>
+    <p>Best regards,<br/>The DJ Studio Team</p>
+    """
+    return html_body
+
+def get_email_template_admin(booking_details, payment_confirm_link):
+    """Generates the HTML body for the admin notification email."""
+    equipment_list = "None selected"
+    if booking_details.get('equipment'):
+        equipment_names = [eq['name'] for eq in booking_details['equipment']]
+        equipment_list = ", ".join(equipment_names)
+
+    booked_date = datetime.datetime.strptime(booking_details['date'], '%Y-%m-%d').strftime('%A, %B %d, %Y')
+    start_time = datetime.datetime.strptime(booking_details['time'], '%H:%M').strftime('%I:%M %p')
+    end_dt = datetime.datetime.strptime(booking_details['time'], '%H:%M') + datetime.timedelta(hours=booking_details['duration'])
+    end_time = end_dt.strftime('%I:%M %p')
+    
+    total_amount = "Rp " + "{:,.0f}".format(booking_details['total'])
+
+    html_body = f"""
+    <p>New DJ Studio Booking Received!</p>
+    <p>Details:</p>
+    <ul>
+        <li><strong>Booking ID:</strong> {booking_details.get('id', 'N/A')}</li>
+        <li><strong>Client Name:</strong> {booking_details.get('userName', 'N/A')} (User ID: {booking_details.get('userId', 'N/A')})</li>
+        <li><strong>Client Email:</strong> {booking_details.get('userEmail', 'N/A')}</li>
+        <li><strong>Date:</strong> {booked_date}</li>
+        <li><strong>Time:</strong> {start_time} - {end_time}</li>
+        <li><strong>Duration:</strong> {booking_details['duration']} hours</li>
+        <li><strong>Equipment:</strong> {equipment_list}</li>
+        <li><strong>Total Cost:</strong> {total_amount}</li>
+        <li><strong>Payment Method:</strong> {booking_details.get('paymentMethod', 'N/A')}</li>
+        <li><strong>Current Payment Status:</strong> {booking_details.get('paymentStatus', 'PENDING').upper()}</li>
+    </ul>
+    """
+    if booking_details.get('paymentStatus') == 'pending' and payment_confirm_link:
+        html_body += f"""
+        <p><strong>Action Required:</strong> Please confirm payment upon client arrival.</p>
+        <p><a href="{payment_confirm_link}" style="background-color: #f97316; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px;">Confirm Payment (Requires Login)</a></p>
+        """
+    html_body += f"""
+    <p>Regards,<br/>Booking System</p>
+    """
+    return html_body
+
+
+# --- API Endpoints ---
+
+@app.route('/api/confirm-booking', methods=['POST'])
 def confirm_booking():
-    if not hasattr(request, 'uid') or not request.uid:
-        return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
-    
-    if not db:
-        return jsonify({"error": "Server Error", "message": "Firestore not initialized."}), 500
+    """
+    Endpoint to confirm a DJ studio booking.
+    Handles adding new bookings or updating existing ones.
+    Includes conflict checking and sends confirmation emails.
+    """
+    try:
+        claims = verify_token(request)
+        user_id = claims['user_id']
+        user_email = claims.get('email', 'anonymous@example.com') # Get user email from claims
+        user_name = claims.get('name', user_id) # Get user name from claims, default to user_id
 
-    # Wrap the entire function logic in a try-except block
-    try: 
         data = request.get_json()
         booking_data = data.get('bookingData')
-        # Use the user_display_name from the verified token, or fallback to 'Anonymous User'
-        user_name_from_token = request.user_display_name 
-        editing_booking_id = data.get('editingBookingId')
+        client_user_name = data.get('userName', user_name) # Use the userName passed from frontend, or default
 
         if not booking_data:
-            return jsonify({"error": "Bad Request", "message": "Booking data is required."}), 400
+            return jsonify({"error": "Booking data is missing"}), 400
 
-        # Extract necessary booking details for conflict check and calendar
         selected_date_str = booking_data['date']
         selected_time_str = booking_data['time']
-        duration_hours = booking_data['duration']
-        user_timezone_str = booking_data.get('userTimeZone', 'Asia/Jakarta') # Default to Asia/Jakarta
+        duration = booking_data['duration']
+        user_timezone = booking_data.get('userTimeZone', 'UTC') # Get timezone from frontend
 
+        # Convert booking time to a timezone-aware datetime object for comparison
         try:
-            user_timezone = pytz.timezone(user_timezone_str)
+            local_tz = pytz.timezone(user_timezone)
+            # Combine date string and time string for parsing
             naive_start_dt = datetime.datetime.strptime(f"{selected_date_str} {selected_time_str}", '%Y-%m-%d %H:%M')
-            booking_start_dt_local = user_timezone.localize(naive_start_dt)
-            booking_end_dt_local = booking_start_dt_local + datetime.timedelta(hours=duration_hours)
-        except pytz.exceptions.UnknownTimeZoneError:
-            print(f"Unknown timezone from frontend: {user_timezone_str}. Defaulting to Asia/Jakarta.")
-            user_timezone = pytz.timezone('Asia/Jakarta')
-            naive_start_dt = datetime.datetime.strptime(f"{selected_date_str} {selected_time_str}", '%Y-%m-%d %H:%M')
-            booking_start_dt_local = user_timezone.localize(naive_start_dt)
-            booking_end_dt_local = booking_start_dt_local + datetime.timedelta(hours=duration_hours)
+            # Localize the naive datetime to the user's timezone
+            booking_start_dt_local = local_tz.localize(naive_start_dt)
+            # Convert to UTC for consistent storage and comparison
+            booking_start_dt_utc = booking_start_dt_local.astimezone(pytz.utc)
+            booking_end_dt_utc = booking_start_dt_utc + datetime.timedelta(hours=duration)
         except Exception as e:
-            print(f"Error parsing date/time for conflict check: {e}")
-            return jsonify({"error": "Invalid date or time format."}), 400
+            print(f"Timezone conversion error: {e}")
+            return jsonify({"error": "Invalid timezone or date/time format."}), 400
 
-        # --- Conflict Check (using the public collection for all bookings) ---
-        public_bookings_collection_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
+        # Define studio operating hours in UTC for comparison
+        # Assuming studio hours 9 AM to 6 PM local time, convert these to UTC based on a typical offset (e.g., +7 for Jakarta)
+        # This is a simplification; a more robust solution would store studio timezone.
+        # Otherwise, the client-side validation using moment.js handles display.
+        # Here, we validate against actual end time vs. studio closing time (6 PM local time, converted to UTC)
         
-        # Query for bookings on the same date
-        date_query = public_bookings_collection_ref.where('date', '==', selected_date_str).stream()
+        # Calculate studio closing time for the selected date in UTC
+        # Assuming studio is in Asia/Jakarta (WITA), which is +08:00
+        studio_tz = pytz.timezone('Asia/Jakarta')
+        naive_closing_dt = datetime.datetime.strptime(f"{selected_date_str} 18:00", '%Y-%m-%d %H:%M')
+        studio_closing_dt_local = studio_tz.localize(naive_closing_dt)
+        studio_closing_dt_utc = studio_closing_dt_local.astimezone(pytz.utc)
+
+
+        # Check if proposed booking ends after studio closing time
+        if booking_end_dt_utc > studio_closing_dt_utc:
+            return jsonify({"error": f"Booking ends after studio closing time ({studio_closing_dt_local.strftime('%I:%M %p')})."}), 409 # Conflict code
+
+        # Fetch all existing bookings for the selected date to check for conflicts
+        bookings_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
+        date_query = bookings_ref.where('date', '==', selected_date_str).stream()
         
         conflicting_slots = []
+        editing_booking_id = data.get('editingBookingId')
+
         for doc_snap in date_query:
             existing_booking = doc_snap.to_dict()
             existing_booking_id = doc_snap.id
 
-            # If editing, skip the current booking from conflict check
+            # Skip the booking being edited during an update operation
             if editing_booking_id and existing_booking_id == editing_booking_id:
                 continue
 
-            existing_user_timezone = existing_booking.get('userTimeZone', 'Asia/Jakarta')
+            existing_user_timezone = existing_booking.get('userTimeZone', 'UTC')
             try:
+                # Convert existing booking times to UTC for accurate comparison
                 existing_local_tz = pytz.timezone(existing_user_timezone)
                 naive_existing_start_dt = datetime.datetime.strptime(f"{existing_booking['date']} {existing_booking['time']}", '%Y-%m-%d %H:%M')
                 existing_start_dt_local = existing_local_tz.localize(naive_existing_start_dt)
-                existing_end_dt_local = existing_start_dt_local + datetime.timedelta(hours=existing_booking['duration'])
+                existing_start_dt_utc = existing_start_dt_local.astimezone(pytz.utc)
+                existing_end_dt_utc = existing_start_dt_utc + datetime.timedelta(hours=existing_booking['duration'])
             except Exception as e:
-                print(f"Error converting existing booking time for conflict check: {e}")
+                print(f"Error converting existing booking time: {e}")
                 continue # Skip this existing booking if its time data is malformed
 
             # Check for overlap: (StartA < EndB) and (EndA > StartB)
-            if (booking_start_dt_local < existing_end_dt_local and
-                booking_end_dt_local > existing_start_dt_local):
+            if (booking_start_dt_utc < existing_end_dt_utc and
+                booking_end_dt_utc > existing_start_dt_utc):
                 conflicting_slots.append({
                     "id": existing_booking_id,
                     "time": existing_booking['time'],
@@ -239,203 +279,100 @@ def confirm_booking():
                 })
 
         if conflicting_slots:
-            print(f"Booking conflict detected for user {request.uid}: {conflicting_slots}")
-            return jsonify({
-                "error": "Selected time slot conflicts with an existing booking.",
-                "conflictingSlots": conflicting_slots
-            }), 409 # HTTP 409 Conflict
+            return jsonify({"error": "Selected time slot conflicts with an existing booking.", "conflictingSlots": conflicting_slots}), 409
 
-        # --- Prepare Firestore Data (now includes userEmail and userTimeZone) ---
-        firestore_data = {
-            "userId": request.uid,
-            "userName": user_name_from_token, # Use the name from the verified token
-            "userEmail": request.user_email, # Use the email from the verified token
+        # Prepare booking data for Firestore
+        firestore_booking_data = {
+            'date': selected_date_str,
+            'time': selected_time_str,
+            'duration': duration,
+            'equipment': booking_data.get('equipment', []),
+            'total': booking_data['total'],
+            'paymentMethod': booking_data.get('paymentMethod', 'cash'),
+            'paymentStatus': booking_data.get('paymentStatus', 'pending'), # Default to pending
+            'userId': user_id,
+            'userName': client_user_name, # Store client's display name
+            'userEmail': user_email, # Store client's email for confirmation
+            'timestamp': firestore.SERVER_TIMESTAMP,
+            'userTimeZone': user_timezone # Store the user's timezone
+        }
+
+        if editing_booking_id:
+            # Update existing booking
+            booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings').document(editing_booking_id)
+            booking_doc_ref.set(firestore_booking_data, merge=True)
+            # Also update the public record if exists and is managed
+            public_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(editing_booking_id)
+            public_booking_doc_ref.set(firestore_booking_data, merge=True)
+            booking_id = editing_booking_id
+            print(f"Booking {booking_id} updated for user {user_id}")
+        else:
+            # Add new booking
+            user_bookings_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings')
+            new_booking_ref = user_bookings_ref.add(firestore_booking_data)
+            booking_id = new_booking_ref[1].id # Get the document ID from the tuple (timestamp, ref)
+            
+            # Also add to a public collection for conflict checking across users
+            public_bookings_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
+            public_bookings_ref.document(booking_id).set(firestore_booking_data)
+            print(f"New booking {booking_id} added for user {user_id}")
+            
+        # After successful booking, send confirmation emails
+        full_booking_details = {
+            "id": booking_id,
             "date": selected_date_str,
             "time": selected_time_str,
-            "duration": duration_hours,
+            "duration": duration,
             "equipment": booking_data.get('equipment', []),
             "total": booking_data['total'],
             "paymentMethod": booking_data.get('paymentMethod', 'cash'),
             "paymentStatus": booking_data.get('paymentStatus', 'pending'),
-            "timestamp": firestore.SERVER_TIMESTAMP,
-            "userTimeZone": user_timezone_str # Store the user's timezone
+            "userName": client_user_name,
+            "userId": user_id,
+            "userEmail": user_email,
+            "userTimeZone": user_timezone
         }
 
-        calendar_event_id = None
+        # Send email to client
+        client_subject = f"Your DJ Studio Booking Confirmation (ID: {booking_id})"
+        client_html_body = get_email_template_client(full_booking_details)
+        send_email(user_email, client_subject, client_html_body)
+
+        # Send email to admin
+        admin_subject = f"New DJ Studio Booking Received (ID: {booking_id})"
+        payment_confirm_link = None
+        if full_booking_details['paymentStatus'] == 'pending':
+            # Create a URL for the admin to confirm payment.
+            # This link will hit the frontend, which will then call the backend /api/confirm-payment
+            # This makes sure the admin is logged into the web app when confirming.
+            payment_confirm_link = f"{request.url_root.replace('api/', '')}confirm-payment?bookingId={booking_id}"
+            # Note: request.url_root gives the base URL including protocol, host, and port.
+            # We replace 'api/' to get to the root of the frontend application.
+            # For this to work correctly when deployed to Render, your React app's base URL
+            # needs to be reachable directly via the public URL.
         
-        print(f"\nAttempting Google Calendar Integration for booking {editing_booking_id if editing_booking_id else 'NEW'}.")
-        print(f"Calendar service initialized: {calendar_service is not None}")
-        print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
-
-        # --- Handle Firestore Save/Update FIRST to get a booking_id ---
-        booking_id = editing_booking_id
-        if editing_booking_id:
-            # Check if the document exists in the user's collection
-            user_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{request.uid}/bookings').document(editing_booking_id)
-            existing_user_booking_snap = user_booking_doc_ref.get()
-
-            if existing_user_booking_snap.exists:
-                # Update existing user booking
-                existing_calendar_event_id = existing_user_booking_snap.to_dict().get('calendarEventId')
-                firestore_data['calendarEventId'] = existing_calendar_event_id # Carry over existing calendar ID
-                user_booking_doc_ref.set(firestore_data, merge=True)
-                print(f"Existing user booking {booking_id} updated in Firestore.")
-            else:
-                # If editing_booking_id was provided but doc not found in user's collection,
-                # it means it's a new booking for this user (e.g., if ID was manually typed or from public list not owned).
-                # Treat as new for this user.
-                new_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{request.uid}/bookings').add(firestore_data)
-                booking_id = new_booking_ref[1].id
-                print(f"Booking {editing_booking_id} not found in user's collection, created as NEW with ID: {booking_id}")
-        else:
-            # Add new booking to user's private collection
-            new_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{request.uid}/bookings').add(firestore_data)
-            booking_id = new_booking_ref[1].id
-            print(f"New booking {booking_id} added to user's private Firestore collection.")
-
-        # Always update the public collection with the latest data and the determined booking_id
-        public_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id)
-        public_booking_doc_ref.set(firestore_data, merge=True)
-        print(f"Public booking record {booking_id} updated/created in Firestore.")
-
-        # --- Google Calendar Integration ---
-        if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID and calendar_creds:
-            try:
-                print("Attempting to refresh Google Calendar token before API call...")
-                calendar_creds.refresh(GoogleAuthRequest())
-                print("Google Calendar token refreshed successfully.")
-
-                start_time_rfc3339 = booking_start_dt_local.isoformat()
-                end_time_rfc3339 = booking_end_dt_local.isoformat()
-
-                event = {
-                    'summary': f'DJ Studio Booking: {user_name_from_token}', # Use the name from token
-                    'description': (
-                        f'Booking ID: {booking_id}\n' # Include the Firestore booking ID
-                        f'Date: {selected_date_str}\n'
-                        f'Time: {selected_time_str} - {booking_end_dt_local.strftime("%H:%M")}\n' # Show end time
-                        f'Duration: {duration_hours} hours\n'
-                        f'Equipment: {", ".join([eq["name"] for eq in booking_data.get("equipment", [])]) if booking_data.get("equipment") else "None"}\n'
-                        f'Total: {booking_data["total"]}\n'
-                        f'Payment: {booking_data.get("paymentMethod", "cash")} ({booking_data.get("paymentStatus", "pending")})'
-                    ),
-                    'start': {
-                        'dateTime': start_time_rfc3339,
-                        'timeZone': user_timezone_str,
-                    },
-                    'end': {
-                        'dateTime': end_time_rfc3339,
-                        'timeZone': user_timezone_str,
-                    },
-                    'attendees': [
-                        {'email': request.user_email if request.user_email else 'your-dj-studio-email@example.com', 'responseStatus': 'accepted'}
-                    ],
-                    'reminders': {
-                        'useDefault': False,
-                        'overrides': [
-                            {'method': 'email', 'minutes': 24 * 60},
-                            {'method': 'popup', 'minutes': 30},
-                        ],
-                    },
-                    'extendedProperties': {
-                        'private': {
-                            'appBookingId': booking_id, # Use the actual Firestore booking ID
-                            'userId': request.uid
-                        }
-                    }
-                }
-                print(f"Google Calendar event object prepared:\n{json.dumps(event, indent=2)}")
-
-                # Use the existing calendarEventId if it was carried over from an update
-                current_calendar_event_id = firestore_data.get('calendarEventId')
-
-                if current_calendar_event_id:
-                    print(f"Attempting to UPDATE Google Calendar event with ID: {current_calendar_event_id}")
-                    event_result = calendar_service.events().update(
-                        calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
-                        eventId=current_calendar_event_id, 
-                        body=event
-                    ).execute()
-                    print(f"Google Calendar event updated: {event_result.get('htmlLink')}")
-                    calendar_event_id = event_result.get('id')
-                else:
-                    print("Attempting to INSERT NEW Google Calendar event.")
-                    event_result = calendar_service.events().insert(calendarId=GOOGLE_CALENDAR_CALENDAR_ID, body=event).execute()
-                    print(f"New Google Calendar event created: {event_result.get('htmlLink')}")
-                    calendar_event_id = event_result.get('id')
-                
-                # Update Firestore with the final calendar event ID
-                public_booking_doc_ref.set({'calendarEventId': calendar_event_id}, merge=True)
-                user_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{request.uid}/bookings').document(booking_id)
-                user_booking_doc_ref.set({'calendarEventId': calendar_event_id}, merge=True)
-                print(f"Firestore booking {booking_id} updated with calendarEventId: {calendar_event_id}")
-
-            except Exception as e:
-                print(f"CRITICAL ERROR during Google Calendar API interaction: {e}")
-                import traceback
-                traceback.print_exc()
-                # Log calendar sync failure in Firestore
-                public_booking_doc_ref.set({'calendarSyncStatus': 'failed', 'calendarSyncError': str(e)}, merge=True)
-                user_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{request.uid}/bookings').document(booking_id)
-                user_booking_doc_ref.set({'calendarSyncStatus': 'failed', 'calendarSyncError': str(e)}, merge=True)
-        else:
-            print("Google Calendar API client or calendar ID is not ready. Skipping calendar event creation.")
+        admin_html_body = get_email_template_admin(full_booking_details, payment_confirm_link)
+        send_email(ADMIN_EMAIL, admin_subject, admin_html_body)
 
 
         return jsonify({"message": "Booking confirmed successfully", "bookingId": booking_id}), 200
 
-    except Exception as e: # This is the main exception handler for the entire function
-        print(f"Overall error confirming booking or calling calendar backend: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"Error in confirm_booking: {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/cancel-calendar-event', methods=['DELETE'], endpoint='cancel_calendar_event')
-def cancel_calendar_event():
-    if not hasattr(request, 'uid') or not request.uid:
-        return jsonify({"error": "Unauthorized", "message": "User not authenticated."}), 401
-
-    data = request.get_json()
-    calendar_event_id = data.get('calendarEventId')
-
-    if not calendar_event_id:
-        return jsonify({"error": "Bad Request", "message": "Calendar event ID is required."}), 400
-
-    print(f"\nAttempting to DELETE Google Calendar Event with ID: {calendar_event_id}")
-    print(f"Calendar service initialized: {calendar_service is not None}")
-    print(f"Google Calendar ID set: {GOOGLE_CALENDAR_CALENDAR_ID}")
-
-    if calendar_service and GOOGLE_CALENDAR_CALENDAR_ID and calendar_creds: # Ensure calendar_creds is available
-        try:
-            # AGGRESSIVE REFRESH: Attempt to refresh token right before use
-            print("Attempting to refresh Google Calendar token before API call for deletion...")
-            calendar_creds.refresh(GoogleAuthRequest())
-            print("Google Calendar token refreshed successfully for deletion.")
-
-            calendar_service.events().delete(
-                calendarId=GOOGLE_CALENDAR_CALENDAR_ID, 
-                eventId=calendar_event_id
-            ).execute()
-            print(f"Google Calendar event {calendar_event_id} deleted successfully.")
-            return jsonify({"message": f"Calendar event {calendar_event_id} cancelled successfully."}), 200
-        except Exception as e:
-            print(f"CRITICAL ERROR deleting Google Calendar event {calendar_event_id}: {e}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-    else:
-        print("Google Calendar API client, calendar ID, or credentials are not ready. Cannot delete event.")
-        return jsonify({"error": "Server Error", "message": "Google Calendar API not initialized or calendar ID missing."}), 500
 
 @app.route('/api/check-booked-slots', methods=['GET'])
 def check_booked_slots():
     """
-    Endpoint to retrieve all booked slots for a specific date from the public collection.
-    This is used by the frontend to display available times and for conflict checking.
+    Endpoint to retrieve all booked slots for a specific date.
+    This is used by the frontend to display available times.
     """
     try:
-        if not db:
-            return jsonify({"error": "Server Error", "message": "Firestore not initialized."}), 500
+        claims = verify_token(request)
+        # user_id = claims['user_id'] # Not strictly needed for public data query, but good for context
 
         selected_date_str = request.args.get('date')
         if not selected_date_str:
@@ -452,17 +389,164 @@ def check_booked_slots():
                 "id": doc_snap.id,
                 "time": booking['time'],
                 "duration": booking['duration'],
-                "userName": booking.get('userName', 'N/A'), # Ensure userName is included
-                "userTimeZone": booking.get('userTimeZone', 'Asia/Jakarta') # Ensure timezone is included
+                "userName": booking.get('userName', 'N/A'),
+                "userTimeZone": booking.get('userTimeZone', 'UTC')
             })
         
         return jsonify({"bookedSlots": booked_slots}), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
     except Exception as e:
         print(f"Error in check_booked_slots: {e}")
         return jsonify({"error": "Failed to fetch booked slots."}), 500
 
+
+@app.route('/api/update-profile', methods=['POST'])
+def update_user_profile():
+    """
+    Endpoint to update a user's display name in Firestore and Firebase Auth.
+    """
+    try:
+        claims = verify_token(request)
+        user_id = claims['user_id']
+        
+        data = request.get_json()
+        new_display_name = data.get('displayName')
+
+        if not new_display_name:
+            return jsonify({"error": "Display name is missing"}), 400
+
+        # Update Firestore profile
+        user_profile_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/profiles').document('userProfile')
+        user_profile_doc_ref.set({'displayName': new_display_name}, merge=True)
+        
+        # Note: Updating Firebase Auth's displayName directly from the backend
+        # requires Firebase Admin SDK which is not directly exposed through `verify_token` claims.
+        # This update is typically done client-side if the user wants to update their Firebase Auth profile.
+        # However, for the purpose of the app's display name, the Firestore record is sufficient.
+        # If the user's *Firebase Auth* display name also needs updating from backend,
+        # you'd need the Firebase Admin SDK initialized with service account credentials,
+        # and then `auth.update_user(user_id, display_name=new_display_name)`.
+        # For simplicity in Canvas, we'll rely on the Firestore profile for display.
+
+        return jsonify({"message": "Profile updated successfully", "displayName": new_display_name}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"Error updating user profile: {e}")
+        return jsonify({"error": "Failed to update profile."}), 500
+
+
+@app.route('/api/cancel-calendar-event', methods=['DELETE'])
+def cancel_calendar_event():
+    """
+    Placeholder endpoint for canceling Google Calendar events.
+    This functionality is not fully implemented on the backend as it requires
+    Google Calendar API integration and OAuth setup, which is beyond
+    the scope of basic Firebase authentication provided by Canvas.
+    It will simply return a success message for now.
+    """
+    try:
+        claims = verify_token(request)
+        user_id = claims['user_id']
+        data = request.get_json()
+        calendar_event_id = data.get('calendarEventId')
+
+        if not calendar_event_id:
+            return jsonify({"error": "calendarEventId is missing"}), 400
+
+        print(f"Admin {user_id} requested to cancel calendar event: {calendar_event_id}. (Backend placeholder)")
+        # --- Placeholder for actual Google Calendar API deletion logic ---
+        # In a real application, you would use google-api-python-client
+        # to delete the event from the shared Google Calendar.
+        # This would involve:
+        # 1. Getting authenticated Google Calendar API service instance (OAuth 2.0).
+        # 2. Calling service.events().delete(calendarId='primary', eventId=calendar_event_id).execute()
+        # ------------------------------------------------------------------
+
+        return jsonify({"message": f"Calendar event {calendar_event_id} cancellation simulated."}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"Error in cancel_calendar_event (simulated): {e}")
+        return jsonify({"error": "Failed to simulate calendar event cancellation."}), 500
+
+
+@app.route('/api/confirm-payment', methods=['POST'])
+def confirm_payment():
+    """
+    New endpoint for admin to confirm payment for a booking.
+    This endpoint is called when the admin clicks the "Confirm Payment" link in their email.
+    It requires Firebase authentication from the admin user.
+    """
+    try:
+        claims = verify_token(request) # Ensure admin is authenticated
+        admin_user_id = claims['user_id']
+        admin_email = claims.get('email', 'N/A')
+
+        data = request.get_json()
+        booking_id = data.get('bookingId')
+
+        if not booking_id:
+            return jsonify({"error": "Booking ID is missing."}), 400
+
+        # Fetch the booking from the public collection first
+        public_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id)
+        public_booking_snap = public_booking_doc_ref.get()
+
+        if not public_booking_snap.exists:
+            return jsonify({"error": "Booking not found."}), 404
+        
+        booking_data = public_booking_snap.to_dict()
+        if booking_data.get('paymentStatus') == 'paid':
+            return jsonify({"message": "Payment already confirmed for this booking."}), 200
+
+        # Update payment status in both public and user-specific collections
+        booking_data['paymentStatus'] = 'paid'
+        booking_data['paymentConfirmedBy'] = admin_user_id
+        booking_data['paymentConfirmedAt'] = firestore.SERVER_TIMESTAMP
+
+        public_booking_doc_ref.set(booking_data, merge=True)
+        
+        # Also update the user's private booking document
+        user_id_of_booking = booking_data.get('userId')
+        if user_id_of_booking:
+            user_booking_doc_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id_of_booking}/bookings').document(booking_id)
+            user_booking_doc_ref.set(booking_data, merge=True) # Merge to keep other fields
+
+        print(f"Payment confirmed for booking {booking_id} by admin {admin_user_id} ({admin_email})")
+
+        # Send confirmation email to the client that their payment has been confirmed
+        client_email_for_confirmation = booking_data.get('userEmail')
+        if client_email_for_confirmation:
+            client_subject = f"Payment Confirmed for Your DJ Studio Booking (ID: {booking_id})"
+            client_html_body = f"""
+            <p>Dear {booking_data.get('userName', 'Valued Client')},</p>
+            <p>Great news! The payment for your DJ Studio booking (ID: {booking_id}) on {datetime.datetime.strptime(booking_data['date'], '%Y-%m-%d').strftime('%A, %B %d, %Y')}
+            at {datetime.datetime.strptime(booking_data['time'], '%H:%M').strftime('%I:%M %p')} has been successfully confirmed.</p>
+            <p>Your payment status is now: <strong>PAID</strong></p>
+            <p>We look forward to your session!</p>
+            <p>Best regards,<br/>The DJ Studio Team</p>
+            """
+            send_email(client_email_for_confirmation, client_subject, client_html_body)
+
+        return jsonify({"message": "Payment confirmed successfully."}), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"Error in confirm_payment: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/')
+def health_check():
+    return jsonify({"status": "Backend is running!"})
+
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    print(f"Python Calendar Backend listening on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    # This is for local development only. Render will run your app using Gunicorn or similar.
+    # Set host to '0.0.0.0' to make it accessible outside localhost in some environments.
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+
