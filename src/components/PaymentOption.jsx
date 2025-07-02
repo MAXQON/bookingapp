@@ -1,3 +1,6 @@
+// src/components/PaymentOption.jsx
+import React from 'react';
+
 const PaymentOption = ({ value, label, selected, onSelect }) => (
     <div onClick={() => onSelect(value)} className={`p-4 rounded-xl cursor-pointer border-2 transition-all ${selected === value ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
         <label className="flex items-center space-x-3 cursor-pointer">
@@ -6,4 +9,5 @@ const PaymentOption = ({ value, label, selected, onSelect }) => (
         </label>
     </div>
 );
-export PaymentOption;
+
+export default PaymentOption;
