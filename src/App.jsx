@@ -617,21 +617,27 @@ function BookingApp() {
                     </div>
                 </div>
 
-                {/* Equipment & Payment */}
                 <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
-                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">🎛️ Select Equipment & Payment</h2>
-                    <div className="grid md:grid-cols-2 gap-8">
-                        <div className="space-y-3">
-                            <h3 className="text-lg font-semibold text-gray-300 mb-2">Players</h3>
-                            {players.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
-                            <h3 className="text-lg font-semibold text-gray-300 mb-2 mt-4">Mixers</h3>
-                            {mixers.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
+                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">🎛️ Select Equipment</h2>
+                    <div className="space-y-3 mb-6"> {/* Removed grid, just stacked */}
+                        <h3 className="text-lg font-semibold text-gray-300 mb-2">Players</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> {/* Optional: add grid here if you want players/mixers side-by-side */}
+                          {players.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
                         </div>
-                        <div className="space-y-3">
-                            <h3 className="text-lg font-semibold text-gray-300 mb-2">Payment Method</h3>
-                            <PaymentOption value="online" label="Online Payment" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
-                            <PaymentOption value="cash" label="Cash on Arrival" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
+
+                        <h3 className="text-lg font-semibold text-gray-300 mb-2 mt-4">Mixers</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> {/* Optional: add grid here */}
+                          {mixers.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
                         </div>
+                    </div>
+                </div>
+
+                {/* --- NEW SEPARATE PAYMENT SECTION --- */}
+                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
+                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">💳 Select Payment Method</h2>
+                    <div className="space-y-3">
+                        <PaymentOption value="online" label="Online Payment" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
+                        <PaymentOption value="cash" label="Cash on Arrival" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
                     </div>
                 </div>
 
