@@ -1,4 +1,4 @@
-export const Modal = ({ show, onClose, title, children }) => {
+const Modal = ({ show, onClose, title, children }) => {
     if (!show) return null;
     return (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
@@ -9,12 +9,12 @@ export const Modal = ({ show, onClose, title, children }) => {
         </div>
     );
 };
+export default Modal;
 
 
 
 
-
-export const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handleUpdateProfile, profileLoading, profileError }) => (
+const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handleUpdateProfile, profileLoading, profileError }) => (
     <Modal show={show} onClose={onClose} title="Manage Profile">
         {profileError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{profileError}</div>}
         <input type="text" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} placeholder="Your Display Name" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
@@ -24,3 +24,4 @@ export const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName,
         </div>
     </Modal>
 );
+export default ProfileModal;

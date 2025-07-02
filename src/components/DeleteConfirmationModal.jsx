@@ -1,4 +1,4 @@
-export const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
+const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
     if (!booking) return null;
     return (
         <Modal show={show} onClose={onClose} title="Confirm Cancellation">
@@ -10,3 +10,4 @@ export const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) =
         </Modal>
     );
 };
+export default DeleteConfirmationModal;

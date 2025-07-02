@@ -1,4 +1,4 @@
-export const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail, password, setPassword, handleAuthAction, handleGoogleSignIn, handleGuestLogin, authError }) => (
+const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail, password, setPassword, handleAuthAction, handleGoogleSignIn, handleGuestLogin, authError }) => (
     <Modal show={show} onClose={onClose} title={isLoginMode ? 'Sign In' : 'Sign Up'}>
         {authError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{authError}</div>}
         <div className="space-y-4">
@@ -17,3 +17,4 @@ export const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, s
         </div>
     </Modal>
 );
+export default AuthModal;

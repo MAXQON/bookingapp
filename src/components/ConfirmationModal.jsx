@@ -1,4 +1,4 @@
-export const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
+const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
     if (!booking) return null;
     return (
         <Modal show={show} onClose={onClose} title={isUpdate ? 'Booking Updated!' : 'Booking Confirmed!'}>
@@ -15,3 +15,4 @@ export const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
         </Modal>
     );
 };
+export default ConfirmationModal;
