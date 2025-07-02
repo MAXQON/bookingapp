@@ -1,3 +1,10 @@
+// src/components/AuthModal.jsx
+import React from 'react';
+import Modal from './Modal'; // Import the base Modal component
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth'; // Import necessary auth functions
+
+// AuthModal is defined as a const and then exported as default.
+// This resolves the "already been declared" and "must be initialized" errors.
 const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail, password, setPassword, handleAuthAction, handleGoogleSignIn, handleGuestLogin, authError }) => (
     <Modal show={show} onClose={onClose} title={isLoginMode ? 'Sign In' : 'Sign Up'}>
         {authError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{authError}</div>}
@@ -17,4 +24,5 @@ const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail
         </div>
     </Modal>
 );
-export const AuthModal;
+
+export default AuthModal;
