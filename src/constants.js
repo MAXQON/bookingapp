@@ -5,4 +5,4 @@ export const DJ_EQUIPMENT = [
     { id: 3, name: 'DJM A9', type: 'DJ Mixer', icon: '🎛️', category: 'mixer' },
     { id: 4, name: 'DJM V10', type: 'DJ Mixer', icon: '🎚️', category: 'mixer' }
 ];
-export ROOM_RATE_PER_HOUR = 200000;
+export const ROOM_RATE_PER_HOUR = 200000;
