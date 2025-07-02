@@ -15,21 +15,19 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
 import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration (from Environment Variables) ---
-// This is now secure and no longer hardcodes keys.
-// For local development, create a .env file in your project root:
-// REACT_APP_FIREBASE_API_KEY="AIza..."
-// REACT_APP_FIREBASE_AUTH_DOMAIN="..."
-// etc.
-const firebaseConfig = {
-  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
-  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.REACT_APP_FIREBASE_APP_ID,
-  measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID
-};
+// Import constants and utilities
+import { DJ_EQUIPMENT, ROOM_RATE_PER_HOUR } from './constants';
+import { formatIDR, formatDate, formatTime, getEndTime } from './utils';
+import firebaseConfig from './components/firebaseConfig';
+
+// Import sub-components
+import AuthModal from './components/AuthModal';
+import { ProfileModal, Modal } from './components/ProfileModal';
+import ConfirmationModal from './components/ConfirmationModal';
+import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+import EquipmentItem from './components/EquipmentItem';
+import PaymentOption from './components/PaymentOption';
+
 
 // --- Canvas Environment Variables ---
 const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -39,34 +37,6 @@ const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefine
 // IMPORTANT: For production, this should also be an environment variable.
 const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com';
 
-// --- Constants ---
-const DJ_EQUIPMENT = [
-    { id: 1, name: 'Pioneer CDJ-3000', type: 'CDJ Player', icon: '🎵', category: 'player' },
-    { id: 2, name: 'Technics SL-1200', type: 'Turntable', icon: '💿', category: 'player' },
-    { id: 3, name: 'DJM A9', type: 'DJ Mixer', icon: '🎛️', category: 'mixer' },
-    { id: 4, name: 'DJM V10', type: 'DJ Mixer', icon: '🎚️', category: 'mixer' }
-];
-const ROOM_RATE_PER_HOUR = 200000;
-
-// --- Utility Functions ---
-const formatIDR = (amount) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
-const formatDate = (dateString) => dateString ? new Date(dateString).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
-const formatTime = (timeString) => {
-    if (!timeString) return '';
-    const [hour, minute] = timeString.split(':');
-    const hourNum = parseInt(hour);
-    const ampm = hourNum >= 12 ? 'PM' : 'AM';
-    const displayHour = hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum;
-    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`;
-};
-const getEndTime = (startTime, durationHours) => {
-    if (!startTime || isNaN(durationHours)) return '';
-    const [hour, minute] = startTime.split(':');
-    const start = new Date();
-    start.setHours(parseInt(hour), parseInt(minute), 0, 0);
-    start.setHours(start.getHours() + durationHours);
-    return `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
-};
 
 // --- Main Booking Application Component ---
 function BookingApp() {
@@ -136,15 +106,19 @@ function BookingApp() {
                 setAuthInstance(auth);
                 console.log("Firebase app, DB, Auth instances set.");
 
+                // Removed automatic anonymous sign-in here.
+                // It will now only happen if the user explicitly clicks "Login as Guest"
+                // or if a custom token is provided by the Canvas environment.
                 if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
                     signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS)
                         .then(() => console.log("Signed in with custom token."))
                         .catch((error) => {
                             console.error("Error signing in with custom token:", error);
-                            signInAnonymously(auth).then(() => console.log("Fell back to anonymous sign-in.")).catch(console.error);
+                            // Do not fall back to anonymous sign-in automatically
+                            setIsLoadingAuth(false); // Auth process is complete, even if token failed
                         });
                 } else {
-                    signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                    setIsLoadingAuth(false); // No custom token, auth process is complete (user is not logged in)
                 }
 
             } catch (e) {
@@ -180,6 +154,8 @@ function BookingApp() {
                         const profileData = userProfileSnap.data();
                         displayNameToUse = profileData.displayName || displayNameToUse;
                     } else {
+                        // Only create a profile if it's not an anonymous user or if it's a new anonymous user
+                        // and you want to track them. For now, we'll create it for all.
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
                             displayName: displayNameToUse,
@@ -207,7 +183,7 @@ function BookingApp() {
                 setAuthError(null);
                 setProfileError(null);
             }
-            setIsLoadingAuth(false);
+            setIsLoadingAuth(false); // Ensure this is set to false after auth state is determined
         });
 
         return () => {
@@ -246,16 +222,14 @@ function BookingApp() {
     // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend ---
     useEffect(() => {
         const fetchBookedSlots = async () => {
-            if (!selectedDate || !userId || !authInstance || isLoadingAuth) {
+            if (!selectedDate || !authInstance || isLoadingAuth) { // Removed userId check here
                 setBookedSlotsForDate([]);
                 return;
             }
 
             try {
-                const idToken = await authInstance.currentUser.getIdToken();
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
-                    headers: { 'Authorization': `Bearer ${idToken}` }
-                });
+                // No token needed for check-booked-slots
+                const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`);
 
                 if (!response.ok) {
                     const errorData = await response.json();
@@ -270,7 +244,7 @@ function BookingApp() {
         };
 
         fetchBookedSlots();
-    }, [selectedDate, userId, authInstance, isLoadingAuth]);
+    }, [selectedDate, authInstance, isLoadingAuth]); // Removed userId from dependencies
 
     // --- EFFECT 5: Handle Payment Confirmation Link ---
     useEffect(() => {
@@ -389,6 +363,23 @@ function BookingApp() {
         } catch (error) {
             console.error("Google Sign-in error:", error);
             setAuthError(`Google Sign-in failed: ${error.message}`);
+        }
+    }, [authInstance]);
+
+    // --- NEW: Handle Guest Login ---
+    const handleGuestLogin = useCallback(async () => {
+        if (!authInstance) {
+            setAuthError("Auth service not ready.");
+            return;
+        }
+        setAuthError(null);
+        try {
+            await signInAnonymously(authInstance);
+            console.log("Signed in anonymously (Guest).");
+            setShowAuthModal(false); // Close auth modal on successful guest login
+        } catch (error) {
+            console.error("Guest login error:", error);
+            setAuthError(`Guest login failed: ${error.message}`);
         }
     }, [authInstance]);
 
@@ -557,7 +548,11 @@ function BookingApp() {
                                 <button onClick={handleLogout} className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition shadow-lg">Logout</button>
                             </>
                         ) : (
-                            <button onClick={() => setShowAuthModal(true)} className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition shadow-lg">Sign In / Sign Up</button>
+                            // Modified this section to offer guest login or full auth
+                            <>
+                                <button onClick={handleGuestLogin} className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl text-lg font-semibold hover:bg-gray-600 transition shadow-lg">Login as Guest</button>
+                                <button onClick={() => setShowAuthModal(true)} className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition shadow-lg">Sign In / Sign Up</button>
+                            </>
                         )}
                     </div>
                 </div>
@@ -677,7 +672,7 @@ function BookingApp() {
                 )}
 
                 {/* Modals */}
-                <AuthModal show={showAuthModal} onClose={() => setShowAuthModal(false)} isLoginMode={isLoginMode} setIsLoginMode={setIsLoginMode} email={email} setEmail={setEmail} password={password} setPassword={setPassword} handleAuthAction={handleAuthAction} handleGoogleSignIn={handleGoogleSignIn} authError={authError} />
+                <AuthModal show={showAuthModal} onClose={() => setShowAuthModal(false)} isLoginMode={isLoginMode} setIsLoginMode={setIsLoginMode} email={email} setEmail={setEmail} password={password} setPassword={setPassword} handleAuthAction={handleAuthAction} handleGoogleSignIn={handleGoogleSignIn} handleGuestLogin={handleGuestLogin} authError={authError} />
                 <ProfileModal show={showProfileModal} onClose={() => setShowProfileModal(false)} newDisplayName={newDisplayName} setNewDisplayName={setNewDisplayName} handleUpdateProfile={handleUpdateProfile} profileLoading={profileLoading} profileError={profileError} />
                 <ConfirmationModal show={showConfirmation} onClose={() => setShowConfirmation(false)} booking={currentBooking} isUpdate={!!editingBookingId} />
                 <DeleteConfirmationModal show={showDeleteConfirmation} onClose={() => setShowDeleteConfirmation(false)} booking={bookingToDelete} onConfirm={confirmDeleteBooking} />
@@ -685,102 +680,5 @@ function BookingApp() {
         </div>
     );
 }
-
-// --- Sub-components for Modals and UI elements for better readability ---
-
-const EquipmentItem = ({ equipment, isSelected, onToggle }) => (
-    <div onClick={() => onToggle(equipment)} className={`p-3 rounded-xl cursor-pointer border-2 transition-all ${isSelected ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
-        <div className="flex items-center space-x-3">
-            <div className="text-2xl">{equipment.icon}</div>
-            <div>
-                <h4 className="font-semibold text-white">{equipment.name}</h4>
-                <p className="text-sm text-gray-400">{equipment.type}</p>
-            </div>
-            {isSelected && <div className="ml-auto w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-white">✓</div>}
-        </div>
-    </div>
-);
-
-const PaymentOption = ({ value, label, selected, onSelect }) => (
-    <div onClick={() => onSelect(value)} className={`p-4 rounded-xl cursor-pointer border-2 transition-all ${selected === value ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
-        <label className="flex items-center space-x-3 cursor-pointer">
-            <input type="radio" name="paymentMethod" value={value} checked={selected === value} onChange={() => onSelect(value)} className="form-radio h-5 w-5 text-orange-600 bg-gray-800 border-gray-600 focus:ring-orange-500" />
-            <span className="font-medium text-white">{label}</span>
-        </label>
-    </div>
-);
-
-const Modal = ({ show, onClose, title, children }) => {
-    if (!show) return null;
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
-            <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700" onClick={e => e.stopPropagation()}>
-                <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">{title}</h2>
-                {children}
-            </div>
-        </div>
-    );
-};
-
-const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail, password, setPassword, handleAuthAction, handleGoogleSignIn, authError }) => (
-    <Modal show={show} onClose={onClose} title={isLoginMode ? 'Sign In' : 'Sign Up'}>
-        {authError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{authError}</div>}
-        <div className="space-y-4">
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
-        </div>
-        <div className="mt-6 space-y-3">
-            <button onClick={() => handleAuthAction(isLoginMode ? () => signInWithEmailAndPassword(getAuth(), email, password) : () => createUserWithEmailAndPassword(getAuth(), email, password))} className="w-full py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700">
-                {isLoginMode ? 'Sign In' : 'Sign Up'}
-            </button>
-            <button onClick={handleGoogleSignIn} className="w-full py-3 bg-red-700 text-white rounded-xl font-semibold hover:bg-red-800 flex items-center justify-center gap-2">
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google logo" className="w-5 h-5" /> Sign In with Google
-            </button>
-            <button onClick={() => setIsLoginMode(p => !p)} className="w-full py-2 text-sm text-gray-400 hover:text-white">{isLoginMode ? 'Need an account? Sign Up' : 'Have an account? Sign In'}</button>
-        </div>
-    </Modal>
-);
-
-const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handleUpdateProfile, profileLoading, profileError }) => (
-    <Modal show={show} onClose={onClose} title="Manage Profile">
-        {profileError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{profileError}</div>}
-        <input type="text" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} placeholder="Your Display Name" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
-        <div className="mt-6 flex gap-4">
-            <button onClick={onClose} className="w-full py-3 bg-gray-600 text-white rounded-xl font-semibold hover:bg-gray-700">Cancel</button>
-            <button onClick={handleUpdateProfile} disabled={profileLoading} className="w-full py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 disabled:bg-gray-500">{profileLoading ? 'Updating...' : 'Update'}</button>
-        </div>
-    </Modal>
-);
-
-const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
-    if (!booking) return null;
-    return (
-        <Modal show={show} onClose={onClose} title={isUpdate ? 'Booking Updated!' : 'Booking Confirmed!'}>
-            <div className="text-center">
-                <div className="text-6xl mb-4 pulse-animation">🎉</div>
-                <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200 space-y-1">
-                    <p><strong>Date:</strong> {formatDate(booking.date)}</p>
-                    <p><strong>Time:</strong> {formatTime(booking.time)}</p>
-                    <p><strong>Total:</strong> {formatIDR(booking.total)}</p>
-                    <p><strong>Status:</strong> <span className="font-semibold text-yellow-400">PENDING</span></p>
-                </div>
-                <button onClick={onClose} className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 w-full">Awesome!</button>
-            </div>
-        </Modal>
-    );
-};
-
-const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
-    if (!booking) return null;
-    return (
-        <Modal show={show} onClose={onClose} title="Confirm Cancellation">
-            <p className="text-gray-300 mb-6 text-center">Are you sure you want to cancel your booking for {formatDate(booking.date)} at {formatTime(booking.time)}?</p>
-            <div className="flex justify-center gap-4">
-                <button onClick={onClose} className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 w-full">No, Keep It</button>
-                <button onClick={onConfirm} className="px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 w-full">Yes, Cancel</button>
-            </div>
-        </Modal>
-    );
-};
 
 export default BookingApp;
