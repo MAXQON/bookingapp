@@ -19,7 +19,7 @@ import { DJ_EQUIPMENT, ROOM_RATE_PER_HOUR } from './constants';
 import { formatIDR, formatDate, formatTime, getEndTime } from './utils';
 
 // Import Firebase config
-import firebaseConfig from './firebaseConfig';
+import firebaseConfig from './components/firebaseConfig'; // Corrected import path for firebaseConfig
 
 // Import sub-components
 import Modal from './components/Modal'; // Corrected import for Modal
@@ -97,7 +97,7 @@ function BookingApp() {
                 console.log("Initializing Firebase app...");
                 // The firebaseConfig is now imported, so no need for the local definition
                 if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
-                    throw new Error("Firebase configuration is missing. Ensure REACT_APP_FIREBASE_PROJECT_ID and REACT_APP_FIREBASE_API_KEY are set in your environment.");
+                    throw new Error("Firebase configuration is missing. Ensure REACT_APP_FIRESTORE_PROJECT_ID and REACT_APP_FIRESTORE_API_KEY are set in your environment.");
                 }
 
                 const app = initializeApp(firebaseConfig);
