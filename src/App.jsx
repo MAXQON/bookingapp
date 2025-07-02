@@ -547,7 +547,7 @@ function BookingApp() {
             <div className="max-w-4xl mx-auto">
                 {/* Header Section */}
                 <div className="text-center mb-8">
-                    <h1 className="text-4xl font-bold text-orange-400 mb-2">🎧 DJ Studio Booking</h1>
+                    <h1 className="text-4xl font-bold text-orange-400 mb-2">POLAR SHOWROOM</h1>
                     <p className="text-gray-300 text-lg">Book your professional DJ room with premium equipment</p>
                     <div className="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
                         {userId ? (
