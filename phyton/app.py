@@ -22,11 +22,6 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True) # Configure CORS
 
-@app.route('/api/check-booked-slots', methods=['GET'])
-def check_booked_slots():
-    # Your backend logic
-    return jsonify({"bookedSlots": []})
-
 if __name__ == '__main__':
     app.run(debug=True, port=os.environ.get("PORT", 5000))
 
