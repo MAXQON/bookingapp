@@ -1,3 +1,6 @@
+// src/components/EquipmentItem.jsx
+import React from 'react';
+
 const EquipmentItem = ({ equipment, isSelected, onToggle }) => (
     <div onClick={() => onToggle(equipment)} className={`p-3 rounded-xl cursor-pointer border-2 transition-all ${isSelected ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
         <div className="flex items-center space-x-3">
@@ -10,4 +13,5 @@ const EquipmentItem = ({ equipment, isSelected, onToggle }) => (
         </div>
     </div>
 );
-export EquipmentItem;
+
+export default EquipmentItem;
