@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - gh-pages # This should be the branch you push to that triggers the deploy, often 'main' or 'master'.
+      - master # This should be the branch you push to that triggers the deploy, often 'main' or 'master'.
                   # Based on your screenshot, it looks like 'gh-pages' is your deployment branch.
 
 jobs:
