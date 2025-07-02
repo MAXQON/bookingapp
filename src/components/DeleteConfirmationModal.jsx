@@ -1,3 +1,9 @@
+// src/components/DeleteConfirmationModal.jsx
+import React from 'react';
+import Modal from './Modal'; // Import the base Modal component
+import { formatDate, formatTime } from '../utils'; // Import utility functions
+
+// DeleteConfirmationModal is defined as a const and then exported as default.
 const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
     if (!booking) return null;
     return (
@@ -10,4 +16,5 @@ const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
         </Modal>
     );
 };
-export DeleteConfirmationModal;
+
+export default DeleteConfirmationModal;
