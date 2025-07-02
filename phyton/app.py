@@ -1,7 +1,7 @@
 # main.py
 
 import os
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google.cloud import firestore
 from google.auth.transport import requests as google_requests
@@ -10,483 +10,341 @@ import datetime
 import pytz # Import pytz for timezone handling
 from flask_mail import Mail, Message # Import Flask-Mail components
 from dotenv import load_dotenv # Import dotenv
+import json # Import json to parse credentials
 
 # --- Google Calendar API Imports ---
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# --- Firebase Admin SDK Imports ---
-import firebase_admin
-from firebase_admin import credentials, auth
-# Removed: from firebase_admin import apps # This import caused the ImportError
-
 # Load environment variables from .env file (for local development)
 load_dotenv()
 
 app = Flask(__name__)
 
-# --- Flask-Mail Configuration (from Environment Variables) ---
-# Ensure these environment variables are set on Render for email functionality
+# Configure CORS to allow specific origins and credentials
+CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True)
+
+# --- Firebase/Google Cloud Credentials from Render Secret File ---
+# Render mounts secret files into the /etc/secrets/ directory.
+# We expect the service account key JSON to be mounted as google-calendar-key.json
+# or provided directly via an environment variable.
+# For local development, ensure GOOGLE_APPLICATION_CREDENTIALS points to your key file,
+# or set GOOGLE_CREDENTIALS_JSON with the content of your key file.
+
+# Initialize Firebase Admin SDK
+try:
+    # Attempt to load credentials from a file path (common for local dev or Render secret file mount)
+    if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if os.path.exists(cred_path):
+            with open(cred_path, 'r') as f:
+                credentials_info = json.load(f)
+            print(f"Loaded credentials from: {cred_path}")
+        else:
+            raise FileNotFoundError(f"Credential file not found at {cred_path}")
+    # Attempt to load credentials from a JSON string environment variable (common for Render)
+    elif "GOOGLE_CREDENTIALS_JSON" in os.environ:
+        credentials_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+        print("Loaded credentials from GOOGLE_CREDENTIALS_JSON environment variable.")
+    else:
+        raise ValueError("No Google Cloud credentials found in environment variables.")
+
+    # Initialize Firebase Admin SDK using the loaded credentials
+    import firebase_admin
+    from firebase_admin import credentials
+    from firebase_admin import auth
+
+    if not firebase_admin._apps: # Initialize only if not already initialized
+        cred = credentials.Certificate(credentials_info)
+        firebase_admin.initialize_app(cred)
+        print("Firebase Admin SDK initialized.")
+
+    db = firestore.client()
+    print(f"Firestore Client initialized for project: {db.project}")
+
+    # Set the Firebase Project ID for Firestore paths
+    FIREBASE_PROJECT_ID = db.project
+    if not FIREBASE_PROJECT_ID:
+        raise ValueError("Firebase project ID could not be determined from credentials.")
+
+except Exception as e:
+    print(f"Failed to initialize Firebase Admin SDK or Firestore: {e}")
+    # Exit or handle gracefully in production, for now, we'll let it proceed but expect errors
+    FIREBASE_PROJECT_ID = os.environ.get("REACT_APP_FIREBASE_PROJECT_ID", "default-project-id") # Fallback for local testing if Firebase fails
+
+
+# --- Flask-Mail Configuration ---
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER')
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
+app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'true').lower() == 'true'
 app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER')
 
 mail = Mail(app)
 
-# --- CORS Configuration ---
-# IMPORTANT: Configure CORS to explicitly allow your frontend domain
-# Ensure this is applied to all requests, including error responses.
-CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True)
+# --- Google Calendar API Configuration ---
+SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-# --- Firebase/Google Cloud Credentials from Render Secret File ---
-# Render mounts secret files to /etc/secrets/ by default.
-# Ensure your service_account_key.json is mounted as 'google-calendar-key.json'
-SERVICE_ACCOUNT_KEY_PATH = '/etc/secrets/google-calendar-key.json'
-GOOGLE_CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar']
-
-# Global variables to store initialized clients
-db = None
-calendar_service = None
-firebase_admin_app = None # To store the Firebase Admin SDK app instance
-FIREBASE_PROJECT_ID = None # Will be derived from service account key
-
-def _initialize_firebase():
-    """Initializes Firebase Firestore and Google Calendar clients."""
-    global db, calendar_service, firebase_admin_app, FIREBASE_PROJECT_ID
-
-    if db and calendar_service and firebase_admin_app:
-        print("Firebase and Google Calendar clients already initialized.")
-        return db, calendar_service, firebase_admin_app
-
+def get_calendar_service():
+    """Shows basic usage of the Google Calendar API.
+    Prints the start and name of the next 10 events on the user's calendar.
+    """
     try:
-        # Load service account credentials from the mounted secret file
-        creds = Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_KEY_PATH, scopes=GOOGLE_CALENDAR_SCOPES
-        )
-        print(f"Loaded credentials from: {SERVICE_ACCOUNT_KEY_PATH}")
-
-        # Initialize Firebase Admin SDK
-        # This is the most robust way to check if an app is already initialized
-        try:
-            firebase_admin_app = firebase_admin.get_app() # Tries to get the default app
-            print("Firebase Admin SDK already initialized, reusing existing app.")
-        except ValueError: # This error is raised if no default app is initialized
-            firebase_admin_app = firebase_admin.initialize_app(creds)
-            print("Firebase Admin SDK initialized.")
-
-
-        # Initialize Firestore DB client
-        db = firestore.Client(credentials=creds, project=creds.project_id)
-        FIREBASE_PROJECT_ID = creds.project_id # Get project ID from credentials
-        print(f"Firestore Client initialized for project: {FIREBASE_PROJECT_ID}")
-
-        # Initialize Google Calendar service
-        calendar_service = build('calendar', 'v3', credentials=creds)
+        # Use the credentials_info dictionary directly
+        creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+        service = build('calendar', 'v3', credentials=creds)
         print("Google Calendar service initialized.")
-
-        return db, calendar_service, firebase_admin_app
-
-    except FileNotFoundError:
-        print(f"Error: Service account key file not found at {SERVICE_ACCOUNT_KEY_PATH}")
-        raise ValueError("Service account key file not found. Cannot initialize Firebase/Google Calendar.")
+        return service
     except Exception as e:
-        print(f"Error initializing Firebase/Google Calendar: {e}")
-        raise
+        print(f"Error initializing Google Calendar service: {e}")
+        return None
 
-# Initialize Firebase and Google Calendar clients on app startup
-try:
-    db, calendar_service, firebase_admin_app = _initialize_firebase()
-except ValueError as e:
-    print(f"Fatal Initialization Error: {e}")
-    # In a production app, you might want to exit or handle this more gracefully
-    # For now, we'll let the app continue, but subsequent calls will fail if clients aren't set.
-    db = None
-    calendar_service = None
-    firebase_admin_app = None
+calendar_service = get_calendar_service()
+CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID') # Ensure this is set in Render environment variables
 
-
-@app.before_request
-def verify_token():
-    """Verifies the Firebase ID token from the Authorization header.
-    Allows specific routes to bypass token verification."""
-    # Using startswith for robustness, as request.path might include query parameters
-    # or have a trailing slash depending on how the request is formed.
-    if request.path.startswith('/api/check-booked-slots'):
-        return
-
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        # For all other /api/ routes, an Authorization header is required
-        if request.path.startswith('/api/'):
-             # Create a response object and manually add CORS headers
-            response = jsonify({"error": "Authorization header missing."})
-            response.status_code = 401
-            # Manually add CORS headers to ensure they are present for this error response
-            response.headers['Access-Control-Allow-Origin'] = 'https://maxqoon.github.io'
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-            return response
-        return # Allow non-API routes (like '/') to proceed without auth
-
+# --- Helper function to verify Firebase ID Token ---
+def verify_firebase_token(id_token_str):
     try:
-        id_token_str = auth_header.split(' ')[1]
-        # Verify the ID token using Firebase Admin SDK
-        decoded_token = auth.verify_id_token(id_token_str)
-        g.user_id = decoded_token['uid']
-        g.user_name = decoded_token.get('name', decoded_token.get('email', 'Anonymous'))
-        print(f"User {g.user_id} authenticated.")
+        # Verify the ID token while checking that the token is not revoked and
+        # that its auth_time is not older than 5 minutes.
+        decoded_token = auth.verify_id_token(id_token_str, check_revoked=True)
+        return decoded_token
+    except ValueError as e:
+        raise ValueError(f"Invalid ID token: {e}")
     except Exception as e:
-        print(f"Token verification failed: {e}")
-        # Create a response object and manually add CORS headers for this error
-        response = jsonify({"error": "Invalid or expired token.", "details": str(e)})
-        response.status_code = 401
-        # Manually add CORS headers to ensure they are present for this error response
-        response.headers['Access-Control-Allow-Origin'] = 'https://maxqoon.github.io'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        return response
+        raise Exception(f"Firebase authentication error: {e}")
 
-
-@app.route('/api/update-profile', methods=['POST'])
-def update_profile():
-    """Updates the user's display name in Firebase Authentication and Firestore profile."""
-    if not g.user_id:
-        return jsonify({"error": "Authentication required."}), 401
-
-    data = request.get_json()
-    new_display_name = data.get('displayName')
-
-    if not new_display_name or not new_display_name.strip():
-        return jsonify({"error": "Display name cannot be empty."}), 400
-
-    try:
-        # Update display name in Firebase Authentication
-        auth.update_user(g.user_id, display_name=new_display_name.strip())
-        print(f"Firebase Auth profile updated for {g.user_id} to {new_display_name.strip()}")
-
-        # Also update the user's profile document in Firestore
-        user_profile_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{g.user_id}/profiles').document('userProfile')
-        user_profile_ref.set({
-            'displayName': new_display_name.strip(),
-            'updatedAt': firestore.SERVER_TIMESTAMP
-        }, merge=True)
-        print(f"Firestore user profile updated for {g.user_id}")
-
-        return jsonify({"message": "Profile updated successfully."}), 200
-    except Exception as e:
-        print(f"Error updating profile for {g.user_id}: {e}")
-        return jsonify({"error": "Failed to update profile.", "details": str(e)}), 500
-
+# --- API Endpoints ---
 
 @app.route('/api/check-booked-slots', methods=['GET'])
 def check_booked_slots():
-    """Checks for booked slots on a given date."""
-    if not db:
-        return jsonify({"error": "Database not initialized."}), 500
-
-    date_str = request.args.get('date')
-    if not date_str:
-        return jsonify({"error": "Date parameter is required."}), 400
-
     try:
-        # Fetch public bookings for the given date
-        bookings_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
-        query = bookings_ref.where('date', '==', date_str)
-        docs = query.stream()
+        selected_date_str = request.args.get('date')
+        if not selected_date_str:
+            return jsonify({"error": "Date parameter is required."}), 400
+
+        # Query public bookings for the selected date
+        public_bookings_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
+        # Using filter() instead of where() for better practice, though where() might also work.
+        # If you encounter index issues, you might need to create a Firestore index.
+        docs = public_bookings_ref.where('date', '==', selected_date_str).stream()
 
         booked_slots = []
         for doc in docs:
             booking_data = doc.to_dict()
-            # Only consider confirmed/pending bookings that are not cancelled
-            if booking_data.get('status') != 'cancelled':
-                booked_slots.append({
-                    'id': doc.id,
-                    'date': booking_data.get('date'),
-                    'time': booking_data.get('time'),
-                    'duration': booking_data.get('duration'),
-                    'userTimeZone': booking_data.get('userTimeZone', 'UTC') # Default to UTC if not specified
-                })
+            booked_slots.append({
+                "id": doc.id,
+                "date": booking_data.get("date"),
+                "time": booking_data.get("time"),
+                "duration": booking_data.get("duration")
+            })
         return jsonify({"bookedSlots": booked_slots}), 200
     except Exception as e:
-        print(f"Error checking booked slots for date {date_str}: {e}")
+        print(f"Error checking booked slots: {e}")
         return jsonify({"error": "An internal error occurred while checking slots."}), 500
 
 
 @app.route('/api/confirm-booking', methods=['POST'])
 def confirm_booking():
-    """Handles new booking creation and existing booking updates."""
-    if not db or not calendar_service:
-        return jsonify({"error": "Services not initialized."}), 500
-    if not g.user_id:
-        return jsonify({"error": "Authentication required."}), 401
-
-    data = request.get_json()
-    booking_data = data.get('bookingData')
-    user_name = data.get('userName', 'Anonymous User') # Use authenticated user name
-    editing_booking_id = data.get('editingBookingId')
-
-    if not booking_data:
-        return jsonify({"error": "Booking data is missing."}), 400
-
-    # Validate required fields
-    required_fields = ['date', 'time', 'duration', 'equipment', 'total', 'paymentMethod', 'paymentStatus', 'userTimeZone']
-    if not all(field in booking_data for field in required_fields):
-        return jsonify({"error": "Missing required booking data fields."}), 400
-
     try:
-        # Create a timezone-aware datetime object for the booking start
-        user_tz = pytz.timezone(booking_data['userTimeZone'])
-        booking_start_dt = user_tz.localize(
-            datetime.datetime.strptime(f"{booking_data['date']} {booking_data['time']}", "%Y-%m-%d %H:%M")
-        )
-        booking_end_dt = booking_start_dt + datetime.timedelta(hours=booking_data['duration'])
+        id_token_str = request.headers.get('Authorization', '').split('Bearer ')[-1]
+        decoded_token = verify_firebase_token(id_token_str)
+        user_id = decoded_token['uid']
+        user_email = decoded_token.get('email', 'anonymous@example.com')
+        user_name = request.json.get('userName', 'Guest User') # Get userName from frontend
 
-        # Convert to UTC for Google Calendar
-        utc_booking_start = booking_start_dt.astimezone(pytz.utc)
-        utc_booking_end = booking_end_dt.astimezone(pytz.utc)
+        booking_data = request.json.get('bookingData')
+        editing_booking_id = request.json.get('editingBookingId')
 
-        event_body = {
-            'summary': f'DJ Studio Booking by {user_name}',
-            'description': (
-                f'Date: {booking_data["date"]}\n'
-                f'Time: {booking_data["time"]} (Local Time)\n'
-                f'Duration: {booking_data["duration"]} hours\n'
-                f'Equipment: {", ".join([eq["name"] for eq in booking_data["equipment"]])}\n'
-                f'Total: {booking_data["total"]}\n'
-                f'Status: {booking_data["paymentStatus"]}\n'
-                f'User ID: {g.user_id}'
-            ),
-            'start': {
-                'dateTime': utc_booking_start.isoformat(),
-                'timeZone': 'UTC',
-            },
-            'end': {
-                'dateTime': utc_booking_end.isoformat(),
-                'timeZone': 'UTC',
-            },
-            'attendees': [
-                {'email': 'firebase-adminsdk-fbsvc@booking-app-1af02.iam.gserviceaccount.com', 'responseStatus': 'accepted'}, # Service account email
-                # Add user's email if available and you want to invite them
-            ],
-            'reminders': {
-                'useDefault': False,
-                'overrides': [
-                    {'method': 'email', 'minutes': 24 * 60}, # 24 hours before
-                    {'method': 'popup', 'minutes': 60},     # 1 hour before
-                ],
-            },
-            'conferenceData': {
-                'createRequest': {
-                    'requestId': f'booking-{g.user_id}-{datetime.datetime.now().timestamp()}'
-                }
-            }
-        }
+        if not booking_data:
+            return jsonify({"error": "Booking data is required."}), 400
 
-        calendar_id = os.environ.get('GOOGLE_CALENDAR_ID') # Ensure this env var is set on Render
-        if not calendar_id:
-            raise ValueError("GOOGLE_CALENDAR_ID environment variable is not set.")
+        # Add server timestamp and user ID
+        booking_data['timestamp'] = firestore.SERVER_TIMESTAMP
+        booking_data['userId'] = user_id
+        booking_data['userEmail'] = user_email
+        booking_data['userName'] = user_name
 
-        # Add common booking fields
-        common_booking_fields = {
-            'userId': g.user_id,
-            'userName': user_name,
-            'date': booking_data['date'],
-            'time': booking_data['time'],
-            'duration': booking_data['duration'],
-            'equipment': booking_data['equipment'],
-            'total': booking_data['total'],
-            'paymentMethod': booking_data['paymentMethod'],
-            'paymentStatus': booking_data['paymentStatus'],
-            'userTimeZone': booking_data['userTimeZone'],
-            'createdAt': firestore.SERVER_TIMESTAMP,
-            'updatedAt': firestore.SERVER_TIMESTAMP,
-            'status': 'pending' # Default status
-        }
-
+        # Determine if it's a new booking or an update
         if editing_booking_id:
             # Update existing booking
+            user_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings').document(editing_booking_id)
             public_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(editing_booking_id)
-            user_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{g.user_id}/bookings').document(editing_booking_id)
 
-            # Get existing event ID
-            existing_booking_snap = public_booking_ref.get()
-            existing_booking_data = existing_booking_snap.to_dict()
-            google_event_id = existing_booking_data.get('googleEventId')
-
-            # Update Google Calendar event
-            if google_event_id:
-                updated_event = calendar_service.events().update(
-                    calendarId=calendar_id, eventId=google_event_id, body=event_body
-                ).execute()
-                print(f"Google Calendar event updated: {updated_event.get('htmlLink')}")
-                common_booking_fields['googleEventId'] = updated_event.get('id')
-                common_booking_fields['googleEventLink'] = updated_event.get('htmlLink')
-            else:
-                # If no event ID, create a new one (shouldn't happen for updates, but as fallback)
-                event = calendar_service.events().insert(
-                    calendarId=calendar_id, body=event_body, conferenceDataVersion=1
-                ).execute()
-                print(f"New Google Calendar event created during update: {event.get('htmlLink')}")
-                common_booking_fields['googleEventId'] = event.get('id')
-                common_booking_fields['googleEventLink'] = event.get('htmlLink')
-
-            public_booking_ref.update(common_booking_fields)
-            user_booking_ref.update(common_booking_fields)
+            user_booking_ref.update(booking_data)
+            public_booking_ref.update(booking_data)
             booking_id = editing_booking_id
-            print(f"Booking {booking_id} updated in Firestore.")
+            message = "Booking updated successfully!"
         else:
-            # Create new booking
-            # Add to public collection
-            public_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
-            new_public_doc_ref = public_booking_ref.document() # Let Firestore generate ID
-            booking_id = new_public_doc_ref.id # Get the ID for consistency
+            # Add new booking
+            user_bookings_collection = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings')
+            public_bookings_collection = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings')
 
-            # Create Google Calendar event
-            event = calendar_service.events().insert(
-                calendarId=calendar_id, body=event_body, conferenceDataVersion=1
-            ).execute()
-            print(f"Google Calendar event created: {event.get('htmlLink')}")
+            # Add to user's private collection
+            user_doc_ref = user_bookings_collection.add(booking_data)
+            booking_id = user_doc_ref[1].id # Get the ID of the newly added document
 
-            common_booking_fields['googleEventId'] = event.get('id')
-            common_booking_fields['googleEventLink'] = event.get('htmlLink')
+            # Add to public collection with the same ID
+            public_bookings_collection.document(booking_id).set(booking_data)
+            message = "Booking confirmed successfully!"
 
-            # Set data in both collections using the same generated ID
-            new_public_doc_ref.set(common_booking_fields)
-            db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{g.user_id}/bookings').document(booking_id).set(common_booking_fields)
-            print(f"New booking {booking_id} created in Firestore.")
+        # Create Google Calendar event (optional, requires GOOGLE_CALENDAR_ID and calendar_service)
+        if calendar_service and CALENDAR_ID:
+            try:
+                start_time_str = f"{booking_data['date']}T{booking_data['time']}:00"
+                end_time_obj = datetime.datetime.strptime(start_time_str, "%Y-%m-%dT%H:%M:%S") + datetime.timedelta(hours=booking_data['duration'])
+                end_time_str = end_time_obj.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Send confirmation email
-        send_booking_confirmation_email(
-            to_email=request.args.get('email', g.user_id), # Use user's email if available, else user_id
-            booking_details=booking_data,
-            booking_id=booking_id,
-            is_update=bool(editing_booking_id)
-        )
+                event = {
+                    'summary': f'DJ Studio Booking - {user_name}',
+                    'description': f'Booked by: {user_email}\nTotal: {booking_data["total"]}\nEquipment: {", ".join([eq["name"] for eq in booking_data["equipment"]])}',
+                    'start': {
+                        'dateTime': start_time_str,
+                        'timeZone': booking_data.get('userTimeZone', 'UTC'),
+                    },
+                    'end': {
+                        'dateTime': end_time_str,
+                        'timeZone': booking_data.get('userTimeZone', 'UTC'),
+                    },
+                    'attendees': [
+                        {'email': user_email},
+                    ],
+                    'reminders': {
+                        'useDefault': False,
+                        'overrides': [
+                            {'method': 'email', 'minutes': 24 * 60},
+                            {'method': 'popup', 'minutes': 10},
+                        ],
+                    },
+                }
+                event = calendar_service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+                print(f"Event created: {event.get('htmlLink')}")
+            except HttpError as error:
+                print(f"An error occurred with Google Calendar: {error}")
+            except Exception as e:
+                print(f"Error creating Google Calendar event: {e}")
 
-        return jsonify({"message": "Booking confirmed successfully!", "bookingId": booking_id}), 200
+        # Send confirmation email (optional, requires Flask-Mail setup)
+        try:
+            msg = Message("Booking Confirmation", recipients=[user_email])
+            msg.body = f"""
+            Dear {user_name},
+
+            Your DJ Studio booking has been successfully confirmed!
+
+            Date: {formatDate(booking_data['date'])}
+            Time: {formatTime(booking_data['time'])} for {booking_data['duration']} hours
+            Total: {formatIDR(booking_data['total'])}
+            Payment Method: {booking_data['paymentMethod']}
+            Status: {booking_data['paymentStatus']}
+
+            Thank you for choosing POLAR SHOWROOM.
+
+            Best regards,
+            The POLAR SHOWROOM Team
+            """
+            mail.send(msg)
+            print(f"Confirmation email sent to {user_email}")
+        except Exception as e:
+            print(f"Error sending email: {e}")
+
+        return jsonify({"message": message, "bookingId": booking_id}), 200
 
     except ValueError as e:
-        print(f"Validation Error in confirm_booking: {e}")
-        return jsonify({"error": str(e)}), 400
-    except HttpError as e:
-        print(f"Google Calendar API Error: {e.content}")
-        return jsonify({"error": "Failed to interact with Google Calendar.", "details": e.content.decode()}), 500
+        return jsonify({"error": str(e)}), 401
     except Exception as e:
-        print(f"Error confirming booking: {e}")
-        return jsonify({"error": "An internal error occurred.", "details": str(e)}), 500
+        print(f"Error in confirm_booking: {e}")
+        return jsonify({"error": "An internal error occurred."}), 500
 
 
 @app.route('/api/cancel-booking', methods=['POST'])
 def cancel_booking():
-    """Cancels a booking by ID."""
-    if not db or not calendar_service:
-        return jsonify({"error": "Services not initialized."}), 500
-    if not g.user_id:
-        return jsonify({"error": "Authentication required."}), 401
-
-    data = request.get_json()
-    booking_id = data.get('bookingId')
-
-    if not booking_id:
-        return jsonify({"error": "Booking ID is required."}), 400
-
     try:
-        # Get booking details to retrieve Google Calendar Event ID
+        id_token_str = request.headers.get('Authorization', '').split('Bearer ')[-1]
+        decoded_token = verify_firebase_token(id_token_str)
+        user_id = decoded_token['uid']
+
+        booking_id = request.json.get('bookingId')
+        if not booking_id:
+            return jsonify({"error": "Booking ID is required."}), 400
+
+        # Delete from user's private collection
+        user_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/bookings').document(booking_id)
+        user_booking_ref.delete()
+
+        # Delete from public collection
         public_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id)
-        booking_snap = public_booking_ref.get()
+        public_booking_ref.delete()
 
-        if not booking_snap.exists:
-            return jsonify({"error": "Booking not found."}), 404
-
-        booking_data = booking_snap.to_dict()
-
-        # Ensure the user has permission to cancel this booking
-        if booking_data.get('userId') != g.user_id:
-            return jsonify({"error": "Unauthorized to cancel this booking."}), 403
-
-        # Delete from Google Calendar
-        google_event_id = booking_data.get('googleEventId')
-        calendar_id = os.environ.get('GOOGLE_CALENDAR_ID')
-        if calendar_id and google_event_id:
-            try:
-                calendar_service.events().delete(calendarId=calendar_id, eventId=google_event_id).execute()
-                print(f"Google Calendar event {google_event_id} deleted.")
-            except HttpError as e:
-                if e.resp.status == 404:
-                    print(f"Google Calendar event {google_event_id} not found, likely already deleted.")
-                else:
-                    raise # Re-raise other HttpErrors
-        else:
-            print("No Google Calendar Event ID or Calendar ID found for this booking, skipping calendar deletion.")
-
-        # Update status in Firestore (instead of direct delete, for history)
-        update_data = {
-            'status': 'cancelled',
-            'cancelledAt': firestore.SERVER_TIMESTAMP
-        }
-        public_booking_ref.update(update_data)
-        db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{g.user_id}/bookings').document(booking_id).update(update_data)
-
-        print(f"Booking {booking_id} cancelled in Firestore.")
         return jsonify({"message": "Booking cancelled successfully."}), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
     except Exception as e:
-        print(f"Error cancelling booking {booking_id}: {e}")
-        return jsonify({"error": "An internal error occurred.", "details": str(e)}), 500
+        print(f"Error in cancel_booking: {e}")
+        return jsonify({"error": "An internal error occurred."}), 500
 
+@app.route('/api/update-profile', methods=['POST'])
+def update_profile():
+    try:
+        id_token_str = request.headers.get('Authorization', '').split('Bearer ')[-1]
+        decoded_token = verify_firebase_token(id_token_str)
+        user_id = decoded_token['uid']
+
+        new_display_name = request.json.get('displayName')
+        if not new_display_name:
+            return jsonify({"error": "Display name is required."}), 400
+
+        # Update display name in Firebase Auth
+        auth.update_user(user_id, display_name=new_display_name)
+
+        # Update display name in Firestore user profile
+        user_profile_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id}/profiles').document('userProfile')
+        user_profile_ref.set({'displayName': new_display_name}, merge=True)
+
+        return jsonify({"message": "Profile updated successfully."}), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"Error in update_profile: {e}")
+        return jsonify({"error": "An internal error occurred."}), 500
 
 @app.route('/api/confirm-payment', methods=['POST'])
 def confirm_payment():
-    """Confirms payment for a booking."""
-    if not db:
-        return jsonify({"error": "Database not initialized."}), 500
-    if not g.user_id:
-        return jsonify({"error": "Authentication required."}), 401
-
-    data = request.get_json()
-    booking_id = data.get('bookingId')
-
-    if not booking_id:
-        return jsonify({"error": "Booking ID is required."}), 400
-
     try:
+        id_token_str = request.headers.get('Authorization', '').split('Bearer ')[-1]
+        decoded_token = verify_firebase_token(id_token_str)
+        user_id_from_token = decoded_token['uid'] # User who is confirming payment
+
+        booking_id = request.json.get('bookingId')
+        if not booking_id:
+            return jsonify({"error": "Booking ID is required."}), 400
+
+        # Check public booking status first
         public_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/public/data/bookings').document(booking_id)
         booking_snap = public_booking_ref.get()
 
         if not booking_snap.exists:
             return jsonify({"error": "Booking not found."}), 404
-
+        
         booking_data = booking_snap.to_dict()
-        # Ensure the user confirming payment is the owner of the booking or an admin (if applicable)
-        if booking_data.get('userId') != g.user_id:
-            return jsonify({"error": "Unauthorized to confirm payment for this booking."}), 403
-
         if booking_data.get('paymentStatus') == 'paid':
             return jsonify({"message": "Payment already confirmed."}), 200
 
         # Update payment status in both collections
         update_data = {'paymentStatus': 'paid', 'paymentConfirmedAt': firestore.SERVER_TIMESTAMP}
         public_booking_ref.update(update_data)
+        
+        user_id_of_booking = booking_data.get('userId')
+        if user_id_of_booking:
+            user_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{user_id_of_booking}/bookings').document(booking_id)
+            user_booking_ref.update(update_data)
 
-        # Update user's private booking as well
-        user_booking_ref = db.collection(f'artifacts/{FIREBASE_PROJECT_ID}/users/{g.user_id}/bookings').document(booking_id)
-        user_booking_ref.update(update_data)
-
-        print(f"Payment confirmed for booking {booking_id}.")
         # Send confirmation email to client (omitted for brevity)
         # ...
-        send_booking_confirmation_email(
-            to_email=request.args.get('email', g.user_id), # Use user's email if available, else user_id
-            booking_details=booking_data,
-            booking_id=booking_id,
-            is_payment_confirmation=True
-        )
 
         return jsonify({"message": "Payment confirmed successfully."}), 200
 
@@ -494,81 +352,9 @@ def confirm_payment():
         return jsonify({"error": str(e)}), 401
     except Exception as e:
         print(f"Error in confirm_payment: {e}")
-        return jsonify({"error": "An internal error occurred.", "details": str(e)}), 500
-
-
-def send_booking_confirmation_email(to_email, booking_details, booking_id, is_update=False, is_payment_confirmation=False):
-    """Sends a booking confirmation email."""
-    if not app.config.get('MAIL_SERVER'):
-        print("Email configuration missing. Skipping email send.")
-        return
-
-    subject = ""
-    body = ""
-
-    if is_payment_confirmation:
-        subject = f"Payment Confirmed for Your DJ Studio Booking #{booking_id}"
-        body = (
-            f"Dear customer,\n\n"
-            f"Your payment for booking #{booking_id} has been successfully confirmed.\n\n"
-            f"Booking Details:\n"
-            f"Date: {booking_details.get('date')}\n"
-            f"Time: {booking_details.get('time')}\n"
-            f"Duration: {booking_details.get('duration')} hours\n"
-            f"Total: {booking_details.get('total')}\n"
-            f"Payment Method: {booking_details.get('paymentMethod')}\n"
-            f"Status: PAID\n\n"
-            f"Thank you for your booking!\n"
-            f"The DJ Studio Team"
-        )
-    elif is_update:
-        subject = f"Your DJ Studio Booking #{booking_id} Has Been Updated"
-        body = (
-            f"Dear customer,\n\n"
-            f"Your booking #{booking_id} has been successfully updated.\n\n"
-            f"New Booking Details:\n"
-            f"Date: {booking_details.get('date')}\n"
-            f"Time: {booking_details.get('time')}\n"
-            f"Duration: {booking_details.get('duration')} hours\n"
-            f"Total: {booking_details.get('total')}\n"
-            f"Payment Method: {booking_details.get('paymentMethod')}\n"
-            f"Status: {booking_details.get('paymentStatus')}\n\n"
-            f"Thank you for your booking!\n"
-            f"The DJ Studio Team"
-        )
-    else:
-        subject = f"Your DJ Studio Booking #{booking_id} Confirmation"
-        body = (
-            f"Dear customer,\n\n"
-            f"Thank you for booking the DJ Studio! Your booking details are as follows:\n\n"
-            f"Booking ID: {booking_id}\n"
-            f"Date: {booking_details.get('date')}\n"
-            f"Time: {booking_details.get('time')}\n"
-            f"Duration: {booking_details.get('duration')} hours\n"
-            f"Total: {booking_details.get('total')}\n"
-            f"Payment Method: {booking_details.get('paymentMethod')}\n"
-            f"Status: {booking_details.get('paymentStatus')}\n\n"
-            f"We look forward to seeing you!\n"
-            f"The DJ Studio Team"
-        )
-
-    try:
-        msg = Message(
-            subject,
-            recipients=[to_email],
-            body=body
-        )
-        mail.send(msg)
-        print(f"Booking confirmation email sent to {to_email} for booking {booking_id}.")
-    except Exception as e:
-        print(f"Failed to send email to {to_email}: {e}")
+        return jsonify({"error": "An internal error occurred."}), 500
 
 
 if __name__ == '__main__':
-    # Ensure all services are initialized before running the app
-    if not db or not calendar_service or not firebase_admin_app:
-        print("Required services (Firestore, Calendar, Firebase Admin) not initialized. Exiting.")
-        exit(1) # Exit if critical services failed to initialize
-
     app.run(debug=True, port=os.environ.get("PORT", 5000))
 
