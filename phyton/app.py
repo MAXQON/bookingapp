@@ -27,11 +27,6 @@ def check_booked_slots():
     # Your backend logic
     return jsonify({"bookedSlots": []})
 
-@app.route('/api/confirm-booking', methods=['POST'])
-def confirm_booking():
-    # Your backend logic
-    return jsonify({"message": "Booking confirmed!"})
-
 if __name__ == '__main__':
     app.run(debug=True, port=os.environ.get("PORT", 5000))
 
