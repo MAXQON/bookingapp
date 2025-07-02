@@ -237,8 +237,7 @@ def confirm_booking():
                 f'Duration: {booking_data["duration"]} hours\n'
                 f'Equipment: {", ".join([eq["name"] for eq in booking_data["equipment"]])}\n'
                 f'Total: {booking_data["total"]}\n'
-                f'Payment Method: {booking_data["paymentMethod"]}\n'
-                f'Status: {booking_data["paymentStatus']}\n'
+                f'Status: {booking_data["paymentStatus"]}\n' # Corrected: Changed 'paymentStatus'' to 'paymentStatus'
                 f'User ID: {g.user_id}'
             ),
             'start': {
