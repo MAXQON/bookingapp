@@ -4,8 +4,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 
 // Import Moment.js for date/time handling
-import moment from 'moment';
-import 'moment-timezone'; // Also import moment-timezone
+import moment from 'moment'; // Keep moment for time calculations in App.jsx
 
 // Import Firebase and Firestore modules
 import { initializeApp } from 'firebase/app';
@@ -18,11 +17,14 @@ import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
 // Import constants and utilities
 import { DJ_EQUIPMENT, ROOM_RATE_PER_HOUR } from './constants';
 import { formatIDR, formatDate, formatTime, getEndTime } from './utils';
-import firebaseConfig from './components/firebaseConfig';
+
+// Import Firebase config
+import firebaseConfig from './firebaseConfig';
 
 // Import sub-components
+import Modal from './components/Modal'; // Corrected import for Modal
 import AuthModal from './components/AuthModal';
-import { ProfileModal, Modal } from './components/ProfileModal';
+import ProfileModal from './components/ProfileModal'; // Corrected import for ProfileModal
 import ConfirmationModal from './components/ConfirmationModal';
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import EquipmentItem from './components/EquipmentItem';
@@ -93,6 +95,7 @@ function BookingApp() {
         if (!firebaseAppInstance) {
             try {
                 console.log("Initializing Firebase app...");
+                // The firebaseConfig is now imported, so no need for the local definition
                 if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
                     throw new Error("Firebase configuration is missing. Ensure REACT_APP_FIREBASE_PROJECT_ID and REACT_APP_FIREBASE_API_KEY are set in your environment.");
                 }
@@ -675,7 +678,7 @@ function BookingApp() {
                 <AuthModal show={showAuthModal} onClose={() => setShowAuthModal(false)} isLoginMode={isLoginMode} setIsLoginMode={setIsLoginMode} email={email} setEmail={setEmail} password={password} setPassword={setPassword} handleAuthAction={handleAuthAction} handleGoogleSignIn={handleGoogleSignIn} handleGuestLogin={handleGuestLogin} authError={authError} />
                 <ProfileModal show={showProfileModal} onClose={() => setShowProfileModal(false)} newDisplayName={newDisplayName} setNewDisplayName={setNewDisplayName} handleUpdateProfile={handleUpdateProfile} profileLoading={profileLoading} profileError={profileError} />
                 <ConfirmationModal show={showConfirmation} onClose={() => setShowConfirmation(false)} booking={currentBooking} isUpdate={!!editingBookingId} />
-                <DeleteConfirmationModal show={showDeleteConfirmation} onClose={() => setShowDeleteConfirmation(false)} booking={bookingToDelete} onConfirm={confirmDeleteBooking} />
+                <DeleteConfirmationModal show={showDeleteConfirmation} onClose={() => setShowConfirmation(false)} booking={bookingToDelete} onConfirm={confirmDeleteBooking} />
             </div>
         </div>
     );
