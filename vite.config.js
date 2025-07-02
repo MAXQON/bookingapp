@@ -4,15 +4,22 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // Add or update the 'base' option
-  base: '/bookingapp/', // IMPORTANT: This should be your repository name surrounded by slashes
+  base: '/bookingapp/',
   optimizeDeps: {
     include: ['moment', 'moment-timezone'],
   },
-  build: {
-    // Potentially needed if optimizeDeps.include alone isn't enough
-    // rollupOptions: {
-    //   external: ['moment', 'moment-timezone'],
-    // }
-  }
+  // IMPORTANT: Add this line to tell Vite to expose REACT_APP_ variables
+  envPrefix: 'REACT_APP_', // This makes process.env.REACT_APP_ accessible
+
+  // Alternatively, if envPrefix doesn't work for some reason, you can use 'define'
+  // This is more verbose but explicitly sets them:
+  // define: {
+  //   'process.env.REACT_APP_FIREBASE_API_KEY': JSON.stringify(process.env.REACT_APP_FIREBASE_API_KEY),
+  //   'process.env.REACT_APP_FIREBASE_AUTH_DOMAIN': JSON.stringify(process.env.REACT_APP_FIREBASE_AUTH_DOMAIN),
+  //   'process.env.REACT_APP_FIREBASE_PROJECT_ID': JSON.stringify(process.env.REACT_APP_FIREBASE_PROJECT_ID),
+  //   'process.env.REACT_APP_FIREBASE_STORAGE_BUCKET': JSON.stringify(process.env.REACT_APP_FIREBASE_STORAGE_BUCKET),
+  //   'process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID),
+  //   'process.env.REACT_APP_FIREBASE_APP_ID': JSON.stringify(process.env.REACT_APP_FIREBASE_APP_ID),
+  //   'process.env.REACT_APP_FIREBASE_MEASUREMENT_ID': JSON.stringify(process.env.REACT_APP_FIREBASE_MEASUREMENT_ID),
+  // },
 });
