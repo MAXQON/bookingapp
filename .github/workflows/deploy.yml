@@ -1,0 +1,44 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - gh-pages # This should be the branch you push to that triggers the deploy, often 'main' or 'master'.
+                  # Based on your screenshot, it looks like 'gh-pages' is your deployment branch.
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest # Uses a fresh Ubuntu environment for each build
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4 # Clones your repository into the runner
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify the Node.js version your project uses
+
+      - name: Install dependencies
+        run: npm install # Installs all your project's npm packages, or 'yarn install' if you use Yarn
+
+      - name: Build React App
+        run: npm run build # Executes your project's build script (e.g., creates the 'dist' or 'build' folder)
+        env: # These are the environment variables for your Firebase config.
+             # Make sure these match the names of your GitHub Secrets!
+          REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
+          REACT_APP_FIREBASE_AUTH_DOMAIN: ${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}
+          REACT_APP_FIREBASE_PROJECT_ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}
+          REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
+          REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
+          REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
+          # REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }} # Uncomment if you use this
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }} # This is a default secret provided by GitHub
+          publish_dir: ./dist # IMPORTANT: Change this to './build' if your build output folder is named 'build'
+                              # If you're using Vite, 'dist' is the default. Create React App uses 'build'.
+          publish_branch: gh-pages # This is the branch where the built files will be pushed for GitHub Pages to serve.
+                                   # Make sure this matches your GitHub Pages source branch setting in repository settings.
