@@ -4,13 +4,15 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Add or update the 'base' option
+  base: '/bookingapp/', // IMPORTANT: This should be your repository name surrounded by slashes
   optimizeDeps: {
-    include: ['moment', 'moment-timezone'], // Add moment-timezone here
+    include: ['moment', 'moment-timezone'],
   },
   build: {
     // Potentially needed if optimizeDeps.include alone isn't enough
     // rollupOptions: {
-    //   external: ['moment', 'moment-timezone'], // Only if you want to completely exclude it from the bundle (advanced)
+    //   external: ['moment', 'moment-timezone'],
     // }
   }
 });
