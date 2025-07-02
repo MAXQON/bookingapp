@@ -15,40 +15,29 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
 import { getFirestore, collection, query, addDoc, onSnapshot, serverTimestamp,
          doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
-// --- Firebase Configuration (using global variables from Canvas) ---
-// These variables are provided by the Canvas environment.
-const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// Safely parse __firebase_config, providing an empty object as fallback
-let parsedFirebaseConfig = {};
-try {
-    if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-        parsedFirebaseConfig = JSON.parse(__firebase_config);
-    }
-} catch (e) {
-    console.error("Error parsing __firebase_config:", e);
-    // Fallback to empty object if parsing fails
-}
-
-// Construct FIREBASE_CONFIG, prioritizing parsed config and providing a fallback for apiKey and projectId
+// --- Firebase Configuration (from Environment Variables) ---
+// This is now secure and no longer hardcodes keys.
+// For local development, create a .env file in your project root:
+// REACT_APP_FIREBASE_API_KEY="AIza..."
+// REACT_APP_FIREBASE_AUTH_DOMAIN="..."
+// etc.
 const firebaseConfig = {
-  apiKey: "AIzaSyBWmkv8YDOAtSqrehqEkO1vWNbBvmhs65A",
-  authDomain: "booking-app-1af02.firebaseapp.com",
-  projectId: "booking-app-1af02",
-  storageBucket: "booking-app-1af02.firebasestorage.app",
-  messagingSenderId: "909871533345",
-  appId: "1:909871533345:web:939fa5b6c8203ad4308260",
-  measurementId: "G-NF4XH5S2QC"
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID,
+  measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID
 };
 
-
+// --- Canvas Environment Variables ---
+const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
 // --- Backend API Base URL ---
-// IMPORTANT: Replace this with your actual Render backend URL when deployed!
-// For local development, it might be http://localhost:5000
-// For Render, it will be something like https://bookingapp-xxxx.onrender.com
-const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com'; // Updated to Render URL
+// IMPORTANT: For production, this should also be an environment variable.
+const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com';
 
 // --- Constants ---
 const DJ_EQUIPMENT = [
@@ -68,7 +57,7 @@ const formatTime = (timeString) => {
     const hourNum = parseInt(hour);
     const ampm = hourNum >= 12 ? 'PM' : 'AM';
     const displayHour = hourNum > 12 ? hourNum - 12 : hourNum === 0 ? 12 : hourNum;
-    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`; // Fixed typo here
+    return `${displayHour}:${minute.padStart(2, '0')} ${ampm}`;
 };
 const getEndTime = (startTime, durationHours) => {
     if (!startTime || isNaN(durationHours)) return '';
@@ -84,14 +73,13 @@ function BookingApp() {
     // UI state
     const [selectedDate, setSelectedDate] = useState('');
     const [selectedTime, setSelectedTime] = useState('');
-    const [duration, setDuration] = useState(2); // Changed initial duration to 2 hours
+    const [duration, setDuration] = useState(2);
     const [selectedEquipment, setSelectedEquipment] = useState([]);
     const [bookings, setBookings] = useState([]);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [currentBooking, setCurrentBooking] = useState(null);
     const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash');
-    const [showPaymentSimulationModal, setShowPaymentSimulationModal] = useState(false);
-    const [paymentConfirmMessage, setPaymentConfirmMessage] = useState(null); // New state for payment confirmation messages
+    const [paymentConfirmMessage, setPaymentConfirmMessage] = useState(null);
 
     // Edit/Cancel specific state
     const [editingBookingId, setEditingBookingId] = useState(null);
@@ -102,11 +90,11 @@ function BookingApp() {
     const [showConflictModal, setShowConflictModal] = useState(false);
     const [conflictError, setConflictError] = useState(null);
     const [conflictingSlots, setConflictingSlots] = useState([]);
-    const [bookedSlotsForDate, setBookedSlotsForDate] = useState([]); // Stores all booked slots for the selected date
+    const [bookedSlotsForDate, setBookedSlotsForDate] = useState([]);
 
     // Firebase state
     const [userId, setUserId] = useState(null);
-    const [userName, setUserName] = useState(''); // New: Store user's display name
+    const [userName, setUserName] = useState('');
     const [firebaseAppInstance, setFirebaseAppInstance] = useState(null);
     const [dbInstance, setDbInstance] = useState(null);
     const [authInstance, setAuthInstance] = useState(null);
@@ -132,21 +120,14 @@ function BookingApp() {
 
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
-        // Only initialize if firebaseAppInstance is null to prevent re-initialization
         if (!firebaseAppInstance) {
             try {
                 console.log("Initializing Firebase app...");
-                // Ensure FIREBASE_CONFIG has projectId before initializing
-                if (!FIREBASE_CONFIG.projectId) {
-                    throw new Error("Firebase 'projectId' is missing from configuration.");
-                }
-                // Also check for apiKey
-                if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === "YOUR_FIREBASE_API_KEY_HERE") {
-                    throw new Error("Firebase 'apiKey' is missing or is a placeholder. Please provide your actual API key.");
+                if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
+                    throw new Error("Firebase configuration is missing. Ensure REACT_APP_FIREBASE_PROJECT_ID and REACT_APP_FIREBASE_API_KEY are set in your environment.");
                 }
 
-
-                const app = initializeApp(FIREBASE_CONFIG);
+                const app = initializeApp(firebaseConfig);
                 const db = getFirestore(app);
                 const auth = getAuth(app);
 
@@ -155,17 +136,14 @@ function BookingApp() {
                 setAuthInstance(auth);
                 console.log("Firebase app, DB, Auth instances set.");
 
-                // Attempt to sign in with custom token if available
                 if (INITIAL_AUTH_TOKEN_FROM_CANVAS) {
                     signInWithCustomToken(auth, INITIAL_AUTH_TOKEN_FROM_CANVAS)
                         .then(() => console.log("Signed in with custom token."))
                         .catch((error) => {
                             console.error("Error signing in with custom token:", error);
-                            // Fallback to anonymous sign-in if custom token fails
-                            signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
+                            signInAnonymously(auth).then(() => console.log("Fell back to anonymous sign-in.")).catch(console.error);
                         });
                 } else {
-                    // If no custom token, sign in anonymously
                     signInAnonymously(auth).then(() => console.log("Signed in anonymously.")).catch(console.error);
                 }
 
@@ -174,17 +152,13 @@ function BookingApp() {
                 setError(`Firebase Initialization Error: ${e.message}`);
                 setIsLoadingAuth(false);
             }
-        } else {
-            console.log("Firebase app already initialized.");
         }
-    }, [firebaseAppInstance]); // Dependency on firebaseAppInstance ensures it only runs once
+    }, [firebaseAppInstance]);
 
 
     // --- EFFECT 2: Handle Firebase Authentication State & User Profile ---
     useEffect(() => {
-        // Depend on both authInstance and dbInstance to ensure they are available
         if (!authInstance || !dbInstance) {
-            console.log("Auth or DB instance not ready, skipping auth state listener.");
             return;
         }
 
@@ -195,29 +169,26 @@ function BookingApp() {
                 setAuthError(null);
                 setShowAuthModal(false);
 
-                // --- Fetch/Create User Profile ---
                 try {
                     setProfileLoading(true);
                     setProfileError(null);
                     const userProfileDocRef = doc(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${user.uid}/profiles/userProfile`);
                     const userProfileSnap = await getDoc(userProfileDocRef);
 
-                    let displayNameToUse = user.displayName || user.email;
+                    let displayNameToUse = user.displayName || user.email || 'New User';
                     if (userProfileSnap.exists()) {
                         const profileData = userProfileSnap.data();
                         displayNameToUse = profileData.displayName || displayNameToUse;
-                        setUserName(displayNameToUse);
-                        setNewDisplayName(displayNameToUse);
                     } else {
                         await setDoc(userProfileDocRef, {
                             userId: user.uid,
                             displayName: displayNameToUse,
                             createdAt: serverTimestamp()
                         }, { merge: true });
-                        setUserName(displayNameToUse);
-                        setNewDisplayName(displayNameToUse);
                         console.log("Created new user profile in Firestore.");
                     }
+                    setUserName(displayNameToUse);
+                    setNewDisplayName(displayNameToUse);
                     console.log("Auth state changed: User is signed in. UID:", user.uid, "Name:", displayNameToUse);
 
                 } catch (profileFetchError) {
@@ -229,7 +200,7 @@ function BookingApp() {
                 }
 
             } else {
-                console.log("Auth state changed: User is signed out. No automatic anonymous sign-in.");
+                console.log("Auth state changed: User is signed out.");
                 setUserId(null);
                 setUserName('');
                 setNewDisplayName('');
@@ -243,14 +214,12 @@ function BookingApp() {
             console.log("Cleaning up auth state listener.");
             unsubscribe();
         };
-    }, [authInstance, dbInstance, APP_ID_FOR_FIRESTORE_PATH]);
+    }, [authInstance, dbInstance]);
 
     // --- EFFECT 3: Firestore Bookings Real-time Listener (User-specific) ---
     useEffect(() => {
-        if (!dbInstance || userId === null || isLoadingAuth || authError) {
-            console.log("User-specific Firestore listener skipped: DB instance, userId, auth loading, or auth error not ready.", { dbInstance, userId, isLoadingAuth, authError });
+        if (!dbInstance || !userId || isLoadingAuth) {
             setBookings([]);
-            setIsLoadingBookings(false);
             return;
         }
 
@@ -258,48 +227,34 @@ function BookingApp() {
         setError(null);
 
         const collectionPath = `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`;
-        console.log("Attempting to listen to user-specific Firestore collection:", collectionPath, "with userId:", userId);
-
-        const bookingsCollectionRef = collection(dbInstance, collectionPath);
-        const q = query(bookingsCollectionRef);
+        const q = query(collection(dbInstance, collectionPath));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            console.log("User-specific Firestore snapshot received.");
-            const fetchedBookings = [];
-            snapshot.forEach((doc) => {
-                fetchedBookings.push({ id: doc.id, ...doc.data() });
-            });
+            const fetchedBookings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             fetchedBookings.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
             setBookings(fetchedBookings);
             setIsLoadingBookings(false);
-            console.log("User-specific bookings updated:", fetchedBookings.length, "bookings.");
         }, (firestoreError) => {
-            console.error("User-specific Firestore Error fetching bookings:", firestoreError);
+            console.error("Firestore Error fetching bookings:", firestoreError);
             setError(`Failed to load your bookings: ${firestoreError.message}`);
             setIsLoadingBookings(false);
         });
 
-        return () => {
-            console.log("Cleaning up user-specific Firestore listener.");
-            unsubscribe();
-        };
-    }, [dbInstance, userId, isLoadingAuth, authError, APP_ID_FOR_FIRESTORE_PATH]);
+        return () => unsubscribe();
+    }, [dbInstance, userId, isLoadingAuth]);
 
-    // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend (for conflict check) ---
+    // --- EFFECT 4: Fetch Booked Slots for Selected Date from Backend ---
     useEffect(() => {
         const fetchBookedSlots = async () => {
             if (!selectedDate || !userId || !authInstance || isLoadingAuth) {
-                setBookedSlotsForDate([]); // Clear previous booked slots if no date or user
+                setBookedSlotsForDate([]);
                 return;
             }
 
             try {
-                // Ensure ID token is available for the backend call
                 const idToken = await authInstance.currentUser.getIdToken();
                 const response = await fetch(`${BACKEND_API_BASE_URL}/api/check-booked-slots?date=${selectedDate}`, {
-                    headers: {
-                        'Authorization': `Bearer ${idToken}`
-                    }
+                    headers: { 'Authorization': `Bearer ${idToken}` }
                 });
 
                 if (!response.ok) {
@@ -309,29 +264,22 @@ function BookingApp() {
 
                 const data = await response.json();
                 setBookedSlotsForDate(data.bookedSlots);
-                console.log(`Fetched booked slots for ${selectedDate}:`, data.bookedSlots);
             } catch (fetchError) {
                 console.error("Error fetching booked slots:", fetchError);
-                // set Error without showing modal, as this is a background fetch
             }
         };
 
         fetchBookedSlots();
-    }, [selectedDate, userId, authInstance, isLoadingAuth, BACKEND_API_BASE_URL]);
+    }, [selectedDate, userId, authInstance, isLoadingAuth]);
 
-    // --- EFFECT 5: Handle Payment Confirmation Link from Admin Email ---
+    // --- EFFECT 5: Handle Payment Confirmation Link ---
     useEffect(() => {
         const urlParams = new URLSearchParams(window.location.search);
         const bookingIdFromUrl = urlParams.get('bookingId');
-
         const confirmPaymentFromUrl = async () => {
-            if (!bookingIdFromUrl || !authInstance || !authInstance.currentUser) {
-                // If no bookingId or user not logged in yet, wait or do nothing
-                return;
-            }
-            // Clear URL parameter after processing to prevent re-triggering
+            if (!bookingIdFromUrl || !authInstance?.currentUser) return;
+            
             history.replaceState({}, document.title, window.location.pathname);
-
             setPaymentConfirmMessage('Confirming payment...');
             try {
                 const idToken = await authInstance.currentUser.getIdToken();
@@ -343,341 +291,203 @@ function BookingApp() {
                     },
                     body: JSON.stringify({ bookingId: bookingIdFromUrl })
                 });
-
                 const data = await response.json();
-                if (response.ok) {
-                    setPaymentConfirmMessage(data.message || 'Payment confirmed successfully!');
-                } else {
-                    throw new Error(data.error || 'Failed to confirm payment.');
-                }
+                if (!response.ok) throw new Error(data.error || 'Failed to confirm payment.');
+                setPaymentConfirmMessage(data.message || 'Payment confirmed successfully!');
             } catch (err) {
                 console.error("Error confirming payment from URL:", err);
                 setPaymentConfirmMessage(`Error confirming payment: ${err.message}`);
             } finally {
-                // Optionally clear message after a few seconds
                 setTimeout(() => setPaymentConfirmMessage(null), 5000);
             }
         };
 
-        // Only attempt to confirm payment if a bookingId is present in the URL
-        // and Firebase auth is ready (user is logged in or will be prompted to log in)
         if (bookingIdFromUrl && authInstance && !isLoadingAuth) {
-             // If user is not yet logged in, the onAuthStateChanged listener will eventually
-             // log them in, and this useEffect will re-run.
-            if (authInstance.currentUser) {
-                confirmPaymentFromUrl();
-            } else {
-                // If not logged in, prompt for login if needed.
-                // For simplicity, we just rely on onAuthStateChanged to eventually sign in.
-                // A more complex solution might show a specific login modal for this flow.
-                console.log("Booking ID in URL, but user not logged in. Waiting for auth.");
-            }
+            confirmPaymentFromUrl();
         }
-    }, [authInstance, isLoadingAuth, BACKEND_API_BASE_URL]); // Depend on authInstance and isLoadingAuth
+    }, [authInstance, isLoadingAuth]);
 
 
     // Memoized values
     const today = useMemo(() => new Date().toISOString().split('T')[0], []);
-    
-    // Time slots from 9 AM (hour 9) to 4 PM (hour 16), which is the last START time
-    const timeSlots = useMemo(() => {
-        const slots = [];
-        // Loop from 9 AM (hour 9) to 4 PM (hour 16) as the last *start* time
-        for (let hour = 9; hour <= 16; hour++) {
-            const time24 = `${hour.toString().padStart(2, '0')}:00`;
-            const time12 = hour > 12 ? `${hour - 12}:00 PM` : hour === 12 ? '12:00 PM' : `${hour}:00 AM`;
-            slots.push({ value: time24, label: time12 });
-        }
-        return slots;
-    }, []);
+    const timeSlots = useMemo(() => Array.from({ length: 8 }, (_, i) => {
+        const hour = 9 + i;
+        const time24 = `${hour.toString().padStart(2, '0')}:00`;
+        const time12 = moment(time24, 'HH:mm').format('h:mm A');
+        return { value: time24, label: time12 };
+    }), []);
 
-    // Prepare time slots for display, including disabled status
     const availableTimeSlotsForDisplay = useMemo(() => {
-        const currentHour = new Date().getHours();
-        const currentMinute = new Date().getMinutes();
-        const todayDate = new Date().toISOString().split('T')[0];
-        const closingTime = moment(`${selectedDate} 18:00`, 'YYYY-MM-DD HH:mm', true); // Studio closes at 6 PM (18:00)
-
+        const closingTime = moment(`${selectedDate} 18:00`, 'YYYY-MM-DD HH:mm');
         return timeSlots.map(slot => {
-            const slotStartMoment = moment(`${selectedDate} ${slot.value}`, 'YYYY-MM-DD HH:mm', true);
+            const slotStartMoment = moment(`${selectedDate} ${slot.value}`, 'YYYY-MM-DD HH:mm');
             const proposedEndMoment = slotStartMoment.clone().add(duration, 'hours');
-            
             let isDisabled = false;
             let disabledReason = '';
 
-            // 1. Check if proposed booking exceeds closing time (6 PM)
             if (proposedEndMoment.isAfter(closingTime)) {
                 isDisabled = true;
-                disabledReason = `Ends after ${formatTime('18:00')}`;
-            }
-
-            // 2. Disable past times on current day
-            if (selectedDate === todayDate) {
-                const slotHour = parseInt(slot.value.split(':')[0]);
-                const slotMinute = parseInt(slot.value.split(':')[1]);
-                if (slotHour < currentHour || (slotHour === currentHour && slotMinute <= currentMinute)) {
-                    isDisabled = true;
-                    disabledReason = 'Past time';
-                }
-            }
-
-            // 3. Check for overlap with any booked slot (if not already disabled)
-            if (!isDisabled && bookedSlotsForDate.length > 0) {
+                disabledReason = `Ends past ${closingTime.format('h:mm A')}`;
+            } else if (selectedDate === today && slotStartMoment.isBefore(moment())) {
+                isDisabled = true;
+                disabledReason = 'Past time';
+            } else if (bookedSlotsForDate.length > 0) {
                 const isConflicting = bookedSlotsForDate.some(bookedSlot => {
-                    const bookedUserTimeZone = bookedSlot.userTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-                    const bookedStartMoment = moment.tz(`${bookedSlot.date} ${bookedSlot.time}`, bookedUserTimeZone);
+                    if (editingBookingId && bookedSlot.id === editingBookingId) return false;
+                    const bookedStartMoment = moment.tz(`${bookedSlot.date} ${bookedSlot.time}`, bookedSlot.userTimeZone || 'UTC');
                     const bookedEndMoment = bookedStartMoment.clone().add(bookedSlot.duration, 'hours');
-
-                    // If editing an existing booking, don't consider it a conflict with itself
-                    if (editingBookingId && bookedSlot.id === editingBookingId) {
-                        return false;
-                    }
-                    
                     return slotStartMoment.isBefore(bookedEndMoment) && proposedEndMoment.isAfter(bookedStartMoment);
                 });
                 if (isConflicting) {
                     isDisabled = true;
-                    disabledReason = 'Already booked';
+                    disabledReason = 'Booked';
                 }
             }
-            return {
-                value: slot.value,
-                label: slot.label + (isDisabled ? ` (${disabledReason})` : ''),
-                disabled: isDisabled
-            };
+            return { ...slot, label: slot.label + (isDisabled ? ` (${disabledReason})` : ''), disabled: isDisabled };
         });
     }, [selectedDate, bookedSlotsForDate, timeSlots, duration, editingBookingId, today]);
-
 
     const calculateTotal = useCallback(() => ROOM_RATE_PER_HOUR * duration, [duration]);
     const players = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'player'), []);
     const mixers = useMemo(() => DJ_EQUIPMENT.filter(eq => eq.category === 'mixer'), []);
 
-    // --- handleDateChange function (ADDED) ---
     const handleDateChange = useCallback((e) => {
-        const newDate = e.target.value;
-        setSelectedDate(newDate);
-        // Reset selected time if the date changes to avoid invalid combinations
+        setSelectedDate(e.target.value);
         setSelectedTime('');
     }, []);
 
-    // --- toggleEquipment function ---
     const toggleEquipment = useCallback((equipment) => {
-        setSelectedEquipment(prev => {
-            const isSelected = prev.some(item => item.id === equipment.id);
-            if (isSelected) {
-                return prev.filter(item => item.id !== equipment.id);
-            } else {
-                return [...prev, equipment];
-            }
-        });
+        setSelectedEquipment(prev => prev.some(item => item.id === equipment.id)
+            ? prev.filter(item => item.id !== equipment.id)
+            : [...prev, equipment]
+        );
     }, []);
 
     // --- Authentication Handlers ---
-    const handleSignUp = useCallback(async () => {
+    const handleAuthAction = useCallback(async (action) => {
         if (!authInstance) {
-            setAuthError("Authentication service not available.");
+            setAuthError("Auth service not ready.");
             return;
         }
         setAuthError(null);
         try {
-            const userCredential = await createUserWithEmailAndPassword(authInstance, email, password);
-            console.log("User signed up successfully!", userCredential.user);
-            // Default display name for Auth user, Firestore profile will pick this up
-            await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
-
+            const userCredential = await action();
+            if (!isLoginMode) { // After sign-up
+                await updateProfile(userCredential.user, { displayName: email.split('@')[0] || 'New User' });
+            }
         } catch (error) {
-            console.error("Sign-up error:", error);
-            setAuthError(`Sign-up failed: ${error.message}`);
+            console.error(`${isLoginMode ? 'Sign-in' : 'Sign-up'} error:`, error);
+            setAuthError(`Failed: ${error.message}`);
         }
-    }, [authInstance, email, password]);
-
-    const handleSignIn = useCallback(async () => {
-        if (!authInstance) {
-            setAuthError("Authentication service not available.");
-            return;
-        }
-        setAuthError(null);
-        try {
-            await signInWithEmailAndPassword(authInstance, email, password);
-            console.log("User signed in successfully!");
-        } catch (error) {
-            console.error("Sign-in error:", error);
-            setAuthError(`Sign-in failed: ${error.message}`);
-        }
-    }, [authInstance, email, password]);
+    }, [authInstance, email, password, isLoginMode]);
 
     const handleGoogleSignIn = useCallback(async () => {
-        if (!authInstance) {
-            setAuthError("Authentication service not available.");
-            return;
-        }
+        if (!authInstance) return;
         setAuthError(null);
         try {
-            await signInWithPopup(authInstance, new GoogleAuthProvider()); // Use new GoogleAuthProvider()
-            console.log("User signed in with Google successfully!");
+            await signInWithPopup(authInstance, new GoogleAuthProvider());
         } catch (error) {
             console.error("Google Sign-in error:", error);
-            if (error.code === 'auth/popup-closed-by-user') {
-                setAuthError("Google Sign-in popup closed. Please try again.");
-            } else if (error.code === 'auth/cancelled-popup-request') {
-                setAuthError("Another sign-in attempt was already in progress. Please try again.");
-            } else {
-                setAuthError(`Google Sign-in failed: ${error.message}`);
-            }
+            setAuthError(`Google Sign-in failed: ${error.message}`);
         }
     }, [authInstance]);
 
+    // --- IMPROVED LOGOUT HANDLER ---
     const handleLogout = useCallback(async () => {
         if (!authInstance) return;
         try {
             await signOut(authInstance);
+            // Reset all relevant application state for a clean slate
             setUserId(null);
             setUserName('');
             setNewDisplayName('');
             setBookings([]);
-            setBookedSlotsForDate([]); // Clear booked slots on logout
-            console.log("User logged out.");
+            setBookedSlotsForDate([]);
             setEditingBookingId(null);
             setSelectedDate('');
             setSelectedTime('');
-            setDuration(2); // Reset duration to default minimum
+            setDuration(2);
             setSelectedEquipment([]);
             setSelectedPaymentMethod('cash');
-
+            setError(null);
+            setAuthError(null);
+            setProfileError(null);
+            setCurrentBooking(null);
+            setShowConfirmation(false);
+            setShowDeleteConfirmation(false);
+            setShowAuthModal(false);
+            setShowProfileModal(false);
+            console.log("User logged out and state reset.");
         } catch (error) {
             console.error("Logout error:", error);
             setError(`Logout failed: ${error.message}`);
         }
     }, [authInstance]);
 
-    // --- Handle User Profile Update (now calls standalone backend) ---
+    // --- Handle User Profile Update ---
     const handleUpdateProfile = useCallback(async () => {
-        if (!userId || !authInstance.currentUser || !authInstance) return; // Ensure authInstance is available
-
-        // Get the current ID token for authentication with your backend
-        const idToken = await authInstance.currentUser.getIdToken();
-
-        if (!newDisplayName.trim()) {
-            setProfileError("Display name cannot be empty.");
-            return;
-        }
-
+        if (!userId || !authInstance.currentUser || !newDisplayName.trim()) return;
         setProfileLoading(true);
         setProfileError(null);
         try {
+            const idToken = await authInstance.currentUser.getIdToken();
             const response = await fetch(`${BACKEND_API_BASE_URL}/api/update-profile`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}` // Send the ID Token for verification
-                },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
-
             const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to update profile via backend.');
-            }
-
-            // If backend successful, update local state
+            if (!response.ok) throw new Error(data.error || 'Failed to update profile.');
             setUserName(newDisplayName.trim());
             setShowProfileModal(false);
-            console.log("User profile updated successfully via standalone backend!");
-
         } catch (error) {
-            console.error("Error updating profile via backend:", error);
+            console.error("Error updating profile:", error);
             setProfileError(`Failed to update profile: ${error.message}`);
         } finally {
             setProfileLoading(false);
         }
     }, [userId, authInstance, newDisplayName]);
 
-    // --- Handle Booking Submission (new/update) - NOW CALLS BACKEND ---
-    const handleBooking = useCallback(async () => { // Changed to async
-        if (!selectedDate || !selectedTime) {
-            setError('Please select both date and time to proceed with booking.');
+    // --- Handle Booking Submission (new/update) ---
+    const handleBooking = useCallback(async () => {
+        if (!selectedDate || !selectedTime || !userId || !authInstance.currentUser) {
+            setError('Please select date, time and be logged in to book.');
             return;
         }
-        if (!userId || !authInstance || isLoadingAuth || profileLoading || authError || profileError) {
-            setError("App not ready to book. Please wait for authentication or resolve prior errors.");
-            console.error("Booking attempted when app state not ready.", { userId, authInstance, isLoadingAuth, profileLoading, authError, profileError });
-            return;
-        }
-
-        // Get the current ID token for authentication with your backend
-        const idToken = await authInstance.currentUser.getIdToken();
-
-        const bookingDataToSend = {
-            date: selectedDate,
-            time: selectedTime,
-            duration: duration,
-            equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-            total: calculateTotal(),
-            paymentMethod: selectedPaymentMethod,
-            paymentStatus: selectedPaymentMethod === 'online' ? 'pending' : 'pending', // Always pending initially, backend will update
-            userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone // Send user's local timezone
-        };
-
         setIsLoadingBookings(true);
         setError(null);
-
         try {
+            const idToken = await authInstance.currentUser.getIdToken();
+            const bookingDataToSend = {
+                date: selectedDate, time: selectedTime, duration,
+                equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
+                total: calculateTotal(), paymentMethod: selectedPaymentMethod,
+                paymentStatus: 'pending',
+                userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+            };
             const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${idToken}` // Send the ID Token
-                },
-                body: JSON.stringify({
-                    bookingData: bookingDataToSend,
-                    userName: userName, // Send current userName to backend
-                    editingBookingId: editingBookingId // Send if in edit mode
-                })
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                body: JSON.stringify({ bookingData: bookingDataToSend, userName, editingBookingId })
             });
-
             const data = await response.json();
-
-            if (!response.ok) {
-                // Handle specific backend errors (e.g., conflict)
-                if (response.status === 409) { // Conflict
-                    setError(data.error || 'Time slot already booked.');
-                    // Optionally, display conflicting slots from data.conflictingSlots
-                } else {
-                    throw new Error(data.error || 'Failed to confirm booking via backend.');
-                }
-            } else {
-                console.log("Booking confirmed via backend:", data);
-                // The backend now handles Firestore updates and calendar integration
-                // We can just show the confirmation based on backend's success
-                setCurrentBooking({
-                    ...bookingDataToSend,
-                    id: data.bookingId, // Get actual Firestore ID from backend response
-                    timestamp: new Date(), // Use local time for immediate modal display
-                    paymentStatus: bookingDataToSend.paymentStatus // Use the status sent
-                });
-                setShowConfirmation(true);
-
-                // Reset form fields after successful booking
-                setEditingBookingId(null);
-                setSelectedDate('');
-                setSelectedTime('');
-                setDuration(2);
-                setSelectedEquipment([]);
-                setSelectedPaymentMethod('cash');
-            }
+            if (!response.ok) throw new Error(data.error || 'Failed to confirm booking.');
+            
+            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, timestamp: new Date() });
+            setShowConfirmation(true);
+            setEditingBookingId(null);
+            setSelectedDate('');
+            setSelectedTime('');
+            setDuration(2);
+            setSelectedEquipment([]);
         } catch (bookingError) {
             console.error("Error calling backend for booking:", bookingError);
             setError(`Failed to book session: ${bookingError.message}`);
         } finally {
             setIsLoadingBookings(false);
-            setShowPaymentSimulationModal(false); // Close simulation modal if open
         }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, userName, editingBookingId, selectedPaymentMethod, isLoadingAuth, profileLoading, authError, profileError]);
+    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, userName, editingBookingId, selectedPaymentMethod]);
 
-
-    // --- Handle Edit Button Click ---
     const handleEditBooking = useCallback((booking) => {
         setEditingBookingId(booking.id);
         setSelectedDate(booking.date);
@@ -686,775 +496,285 @@ function BookingApp() {
         setSelectedEquipment(booking.equipment || []);
         setSelectedPaymentMethod(booking.paymentMethod || 'cash');
         setError(null);
-
-        if (bookingFormRef.current) {
-            bookingFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        bookingFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, []);
 
-    // --- Handle Cancel Button Click ---
     const handleCancelBooking = useCallback((booking) => {
         setBookingToDelete(booking);
         setShowDeleteConfirmation(true);
     }, []);
 
-    // --- Confirm Delete Action - NOW CALLS BACKEND ---
+    // --- UPDATED DELETE/CANCEL LOGIC ---
     const confirmDeleteBooking = useCallback(async () => {
-        if (!bookingToDelete || !dbInstance || !userId || !authInstance) return;
-
+        if (!bookingToDelete || !authInstance?.currentUser) return;
         setIsLoadingBookings(true);
         setError(null);
-
         try {
             const idToken = await authInstance.currentUser.getIdToken();
-
-            // First, attempt to delete from Google Calendar via backend
-            if (bookingToDelete.calendarEventId) {
-                try {
-                    const response = await fetch(`${BACKEND_API_BASE_URL}/api/cancel-calendar-event`, {
-                        method: 'DELETE',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${idToken}`
-                        },
-                        body: JSON.stringify({ calendarEventId: bookingToDelete.calendarEventId })
-                    });
-
-                    const data = await response.json();
-                    if (!response.ok) {
-                        console.warn('Failed to delete calendar event via backend, proceeding with Firestore delete:', data.error || 'Unknown error');
-                        setError(`Failed to remove from calendar: ${data.error || 'Unknown error'}. Deleting from app.`);
-                    } else {
-                        console.log("Calendar event deleted successfully via backend:", bookingToDelete.calendarEventId);
-                    }
-                } catch (calendarDeleteError) {
-                    console.warn('Network error or unexpected error during calendar delete via backend:', calendarDeleteError);
-                    setError(`Network error or unexpected calendar error: ${calendarDeleteError.message}. Deleting from app.`);
-                }
-            } else {
-                console.log("No calendarEventId found for booking, skipping calendar delete.");
+            // This now calls the backend to handle all deletions atomically
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/cancel-booking`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                body: JSON.stringify({ bookingId: bookingToDelete.id })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to cancel booking.');
             }
-
-            // Always proceed to delete from Firestore (directly from frontend for simplicity,
-            // or you could add a backend endpoint for this too if more complex logic is needed)
-            const bookingDocRef = doc(collection(dbInstance, `artifacts/${APP_ID_FOR_FIRESTORE_PATH}/users/${userId}/bookings`), bookingToDelete.id);
-            await deleteDoc(bookingDocRef);
-            console.log("Booking successfully deleted from Firestore:", bookingToDelete.id);
-            
+            console.log("Booking cancellation processed by backend:", bookingToDelete.id);
+            // The onSnapshot listener will automatically remove the booking from the UI
         } catch (deleteError) {
-            console.error("Error deleting booking (Firestore or overall):", deleteError);
-            setError(`Failed to delete booking: ${deleteError.message}`);
+            console.error("Error cancelling booking:", deleteError);
+            setError(`Failed to cancel booking: ${deleteError.message}`);
         } finally {
             setIsLoadingBookings(false);
             setShowDeleteConfirmation(false);
             setBookingToDelete(null);
         }
-    }, [bookingToDelete, dbInstance, userId, authInstance, BACKEND_API_BASE_URL, APP_ID_FOR_FIRESTORE_PATH]);
+    }, [bookingToDelete, authInstance]);
 
-
-    // Display loading state for authentication or if Firebase is not initialized, or if auth failed
-    if (isLoadingAuth || !firebaseAppInstance || authError || profileLoading) {
+    if (isLoadingAuth || !firebaseAppInstance) {
         return (
             <div className="bg-gray-900 min-h-screen flex items-center justify-center text-orange-200 text-2xl p-4 text-center">
-                {authError ? `Authentication Error: ${authError}` : profileLoading ? "Loading profile..." : "Authenticating Firebase..."}
-                <br/>
-                {error && <span className="text-red-300 text-base">{error}</span>}
-                {profileError && <span className="text-red-300 text-base">{profileError}</span>}
+                {error ? `Initialization Error: ${error}` : "Authenticating Firebase..."}
             </div>
         );
     }
 
     // Main App Render
     return (
-        <div className="bg-gray-900 min-h-screen p-4">
+        <div className="bg-gray-900 min-h-screen p-4 font-sans">
             <div className="max-w-4xl mx-auto">
                 {/* Header Section */}
                 <div className="text-center mb-8">
-                    <h1 className="text-4xl font-bold text-orange-400 mb-2">
-                        🎧 DJ Studio Booking
-                    </h1>
-                    <p className="text-gray-300 text-lg">
-                        Book your professional DJ room with premium equipment
-                    </p>
+                    <h1 className="text-4xl font-bold text-orange-400 mb-2">🎧 DJ Studio Booking</h1>
+                    <p className="text-gray-300 text-lg">Book your professional DJ room with premium equipment</p>
                     <div className="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
                         {userId ? (
                             <>
-                                <p className="text-gray-400 text-sm">
-                                    Logged In: <span className="font-semibold text-orange-200">
-                                        {userName || (userId ? userId.substring(0, 8) + '...' : 'Loading...')}
-                                    </span>
-                                </p>
-                                <button
-                                    onClick={() => {
-                                        setNewDisplayName(userName);
-                                        setShowProfileModal(true);
-                                    }}
-                                    className="px-4 py-2 bg-orange-600 text-white rounded-xl text-sm hover:bg-orange-700 transition duration-200 shadow-lg"
-                                >
-                                    Edit Profile
-                                </button>
-                                <button
-                                    onClick={handleLogout}
-                                    className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition duration-200 shadow-lg"
-                                >
-                                    Logout
-                                </button>
+                                <p className="text-gray-400 text-sm">Logged In: <span className="font-semibold text-orange-200">{userName}</span></p>
+                                <button onClick={() => setShowProfileModal(true)} className="px-4 py-2 bg-orange-600 text-white rounded-xl text-sm hover:bg-orange-700 transition shadow-lg">Edit Profile</button>
+                                <button onClick={handleLogout} className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition shadow-lg">Logout</button>
                             </>
                         ) : (
-                            <button
-                                onClick={() => setShowAuthModal(true)}
-                                className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition duration-200 shadow-lg"
-                            >
-                                Sign In / Sign Up
-                            </button>
+                            <button onClick={() => setShowAuthModal(true)} className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition shadow-lg">Sign In / Sign Up</button>
                         )}
                     </div>
                 </div>
 
-                {/* General Error Display */}
-                {(error || profileError) && !authError && (
-                    <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4" role="alert">
-                        <strong className="font-bold">Error!</strong>
-                        <span className="block sm:inline"> {error || profileError}</span>
+                {/* General Error/Message Display */}
+                {(error || profileError || paymentConfirmMessage) && (
+                    <div className={`px-4 py-3 rounded-xl relative mb-4 ${paymentConfirmMessage ? (paymentConfirmMessage.includes('Error') ? 'bg-red-800' : 'bg-green-800') : 'bg-red-800'} text-white`} role="alert">
+                        <strong className="font-bold">{paymentConfirmMessage ? 'Status:' : 'Error!'}</strong>
+                        <span className="block sm:inline"> {error || profileError || paymentConfirmMessage}</span>
                     </div>
                 )}
 
-                {/* Payment Confirmation Message Display */}
-                {paymentConfirmMessage && (
-                    <div className={`px-4 py-3 rounded-xl relative mb-4 ${
-                        paymentConfirmMessage.includes('Error') ? 'bg-red-800 text-white' : 'bg-green-800 text-white'
-                    }`} role="alert">
-                        <span className="block sm:inline">{paymentConfirmMessage}</span>
-                    </div>
-                )}
-
-                {/* Main Booking Card: Date, Time & Summary */}
+                {/* Main Booking Card */}
                 <div ref={bookingFormRef} className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
                     <div className="grid md:grid-cols-2 gap-8">
-                        {/* Date & Time Selection Inputs */}
                         <div className="space-y-6">
-                            <h2 className="text-2xl font-semibold text-orange-300 mb-4">
-                                📅 Schedule Your Session
-                            </h2>
-
+                            <h2 className="text-2xl font-semibold text-orange-300 mb-4">📅 Schedule Your Session</h2>
                             <div>
-                                <label htmlFor="select-date" className="block text-sm font-medium text-gray-300 mb-2">
-                                    Select Date
-                                </label>
-                                <input
-                                    id="select-date"
-                                    type="date"
-                                    min={today}
-                                    value={selectedDate}
-                                    onChange={handleDateChange} // Corrected: using handleDateChange
-                                    className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                />
+                                <label htmlFor="select-date" className="block text-sm font-medium text-gray-300 mb-2">Select Date</label>
+                                <input id="select-date" type="date" min={today} value={selectedDate} onChange={handleDateChange} className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 bg-gray-700 text-white"/>
                             </div>
-
                             <div>
-                                <label htmlFor="select-time" className="block text-sm font-medium text-gray-300 mb-2">
-                                    Select Time
-                                </label>
-                                <select
-                                    id="select-time"
-                                    value={selectedTime}
-                                    onChange={(e) => setSelectedTime(e.target.value)}
-                                    className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                >
+                                <label htmlFor="select-time" className="block text-sm font-medium text-gray-300 mb-2">Select Time</label>
+                                <select id="select-time" value={selectedTime} onChange={(e) => setSelectedTime(e.target.value)} className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 bg-gray-700 text-white">
                                     <option value="">Choose a time...</option>
                                     {availableTimeSlotsForDisplay.map(slot => (
-                                        <option
-                                            key={slot.value}
-                                            value={slot.value}
-                                            disabled={slot.disabled} // Use the disabled property
-                                            className={slot.disabled ? 'text-gray-500 bg-gray-700' : ''} // Apply muted style
-                                        >
-                                            {slot.label}
-                                        </option>
+                                        <option key={slot.value} value={slot.value} disabled={slot.disabled} className={slot.disabled ? 'text-gray-500' : ''}>{slot.label}</option>
                                     ))}
                                 </select>
-                                {selectedDate && availableTimeSlotsForDisplay.every(slot => slot.disabled) && (
-                                    <p className="text-red-300 text-sm mt-2">No available slots for this date with the selected duration.</p>
-                                )}
+                                {selectedDate && availableTimeSlotsForDisplay.every(s => s.disabled) && <p className="text-red-300 text-sm mt-2">No available slots for this date with the selected duration.</p>}
                             </div>
-
                             <div>
-                                <label htmlFor="select-duration" className="block text-sm font-medium text-gray-300 mb-2">
-                                    Duration (hours)
-                                </label>
-                                <select
-                                    id="select-duration"
-                                    value={duration}
-                                    onChange={(e) => setDuration(parseInt(e.target.value))}
-                                    className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                >
-                                    {/* Changed options for minimum duration of 2 hours */}
+                                <label htmlFor="select-duration" className="block text-sm font-medium text-gray-300 mb-2">Duration (hours)</label>
+                                <select id="select-duration" value={duration} onChange={(e) => setDuration(parseInt(e.target.value))} className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 bg-gray-700 text-white">
                                     <option value={2}>2 hours</option>
                                     <option value={3}>3 hours</option>
                                     <option value={4}>4 hours</option>
-                                    {/* No option for 6 or 8 hours as max time is 6 PM and min duration 2 hours, last booking at 4pm */}
                                 </select>
                             </div>
                         </div>
-
-                        {/* Booking Summary Display */}
                         <div className="bg-gray-700 rounded-xl p-6 border border-gray-600">
-                            <h3 className="text-xl font-semibold text-orange-300 mb-4">
-                                💰 Booking Summary
-                            </h3>
-
+                            <h3 className="text-xl font-semibold text-orange-300 mb-4">💰 Booking Summary</h3>
                             <div className="space-y-3 text-gray-300">
-                                <div className="flex justify-between text-sm">
-                                    <span>Room Rate (per hour)</span>
-                                    <span>{formatIDR(ROOM_RATE_PER_HOUR)}</span>
-                                </div>
-                                <div className="flex justify-between text-sm">
-                                    <span>Duration</span>
-                                    <span>{duration} hours</span>
-                                </div>
-                                <div className="flex justify-between text-sm">
-                                    <span>Equipment</span>
-                                    <span className="text-green-400">Included</span>
-                                </div>
+                                <div className="flex justify-between text-sm"><span>Room Rate (per hour)</span><span>{formatIDR(ROOM_RATE_PER_HOUR)}</span></div>
+                                <div className="flex justify-between text-sm"><span>Duration</span><span>{duration} hours</span></div>
+                                <div className="flex justify-between text-sm"><span>Equipment</span><span className="text-green-400">Included</span></div>
                                 <hr className="my-3 border-gray-600" />
-                                <div className="flex justify-between font-semibold text-lg">
-                                    <span>Total</span>
-                                    <span className="text-orange-400">{formatIDR(calculateTotal())}</span>
-                                </div>
+                                <div className="flex justify-between font-semibold text-lg"><span>Total</span><span className="text-orange-400">{formatIDR(calculateTotal())}</span></div>
                             </div>
-
                             {selectedDate && selectedTime && (
                                 <div className="mt-6 p-4 bg-gray-600 rounded-lg text-gray-200">
-                                    <p className="text-sm text-gray-300">Session Details:</p>
                                     <p className="font-medium">{formatDate(selectedDate)}</p>
-                                    <p className="font-medium">
-                                        {formatTime(selectedTime)} - {formatTime(getEndTime(selectedTime, duration))}
-                                    </p>
+                                    <p className="font-medium">{formatTime(selectedTime)} - {formatTime(getEndTime(selectedTime, duration))}</p>
                                 </div>
                             )}
                         </div>
                     </div>
                 </div>
 
-                {/* Equipment Selection Section */}
+                {/* Equipment & Payment */}
                 <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
-                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">
-                        🎛️ Select Your Preferred Equipment
-                    </h2>
-                    <p className="text-gray-300 mb-6">All equipment is included in the room price. Please select what you'd like to use:</p>
-
-                    <div className="grid sm:grid-cols-2 gap-6">
-                        {/* Players Equipment List */}
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-300 mb-4">Players</h3>
-                            <div className="space-y-3">
-                                {players.map(equipment => {
-                                    const isSelected = selectedEquipment.some(item => item.id === equipment.id);
-                                    return (
-                                        <div
-                                            key={equipment.id}
-                                            onClick={() => toggleEquipment(equipment)}
-                                            className={`p-4 rounded-xl cursor-pointer border-2 transition-all duration-200 hover:translate-y-[-2px] ${
-                                                isSelected
-                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white'
-                                                    : 'border-gray-700 bg-gray-700 hover:border-orange-500 hover:shadow-sm text-gray-200'
-                                            }`}
-                                        >
-                                            <div className="flex items-center space-x-3">
-                                                <div className="text-2xl">{equipment.icon}</div>
-                                                <div>
-                                                    <h4 className="font-semibold">{equipment.name}</h4>
-                                                    <p className="text-sm text-gray-400">{equipment.type}</p>
-                                                </div>
-                                                {isSelected && (
-                                                    <div className="ml-auto">
-                                                        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center">
-                                                            <span className="text-white text-sm">✓</span>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">🎛️ Select Equipment & Payment</h2>
+                    <div className="grid md:grid-cols-2 gap-8">
+                        <div className="space-y-3">
+                            <h3 className="text-lg font-semibold text-gray-300 mb-2">Players</h3>
+                            {players.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
+                            <h3 className="text-lg font-semibold text-gray-300 mb-2 mt-4">Mixers</h3>
+                            {mixers.map(eq => <EquipmentItem key={eq.id} equipment={eq} isSelected={selectedEquipment.some(i => i.id === eq.id)} onToggle={toggleEquipment} />)}
                         </div>
-
-                        {/* Mixers Equipment List */}
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-300 mb-4">Mixers</h3>
-                            <div className="space-y-3">
-                                {mixers.map(equipment => {
-                                    const isSelected = selectedEquipment.some(item => item.id === equipment.id);
-                                    return (
-                                        <div
-                                            key={equipment.id}
-                                            onClick={() => toggleEquipment(equipment)}
-                                            className={`p-4 rounded-xl cursor-pointer border-2 transition-all duration-200 hover:translate-y-[-2px] ${
-                                                isSelected
-                                                    ? 'border-orange-500 bg-orange-900 shadow-md text-white'
-                                                    : 'border-gray-700 bg-gray-700 hover:border-orange-500 hover:shadow-sm text-gray-200'
-                                            }`}
-                                        >
-                                            <div className="flex items-center space-x-3">
-                                                <div className="text-2xl">{equipment.icon}</div>
-                                                <div>
-                                                    <h4 className="font-semibold">{equipment.name}</h4>
-                                                    <p className="text-sm text-gray-400">{equipment.type}</p>
-                                                </div>
-                                                {isSelected && (
-                                                    <div className="ml-auto">
-                                                        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center">
-                                                            <span className="text-white text-sm">✓</span>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                        <div className="space-y-3">
+                            <h3 className="text-lg font-semibold text-gray-300 mb-2">Payment Method</h3>
+                            <PaymentOption value="online" label="Online Payment" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
+                            <PaymentOption value="cash" label="Cash on Arrival" selected={selectedPaymentMethod} onSelect={setSelectedPaymentMethod} />
                         </div>
-                    </div>
-
-                    {selectedEquipment.length > 0 && (
-                        <div className="mt-6 p-4 bg-green-900 rounded-lg text-green-300 border border-green-700">
-                            <h4 className="font-semibold mb-2">Selected Equipment:</h4>
-                            <div className="flex flex-wrap gap-2">
-                                {selectedEquipment.map(eq => (
-                                    <span key={eq.id} className="bg-green-700 text-green-100 px-3 py-1 rounded-full text-sm">
-                                        {eq.icon} {eq.name}
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Payment Method Selection */}
-                <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mb-6 border border-gray-700">
-                    <h2 className="text-2xl font-semibold text-orange-300 mb-6">
-                        💳 Select Payment Method
-                    </h2>
-                    <div className="flex flex-col sm:flex-row gap-4">
-                        <label className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 w-full ${selectedPaymentMethod === 'online' ? 'border-orange-500 bg-orange-900 text-white shadow-md' : 'border-gray-700 bg-gray-700 hover:border-orange-500 text-gray-200'}`}>
-                            <input
-                                type="radio"
-                                name="paymentMethod"
-                                value="online"
-                                checked={selectedPaymentMethod === 'online'}
-                                onChange={() => setSelectedPaymentMethod('online')}
-                                className="form-radio h-5 w-5 text-orange-600"
-                            />
-                            <span className="ml-3 text-lg font-medium">Online Payment</span>
-                        </label>
-                        <label className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 w-full ${selectedPaymentMethod === 'cash' ? 'border-orange-500 bg-orange-900 text-white shadow-md' : 'border-gray-700 bg-gray-700 hover:border-orange-500 text-gray-200'}`}>
-                            <input
-                                type="radio"
-                                name="paymentMethod"
-                                value="cash"
-                                checked={selectedPaymentMethod === 'cash'}
-                                onChange={() => setSelectedPaymentMethod('cash')}
-                                className="form-radio h-5 w-5 text-orange-600"
-                            />
-                            <span className="ml-3 text-lg font-medium">Cash on Arrival</span>
-                        </label>
                     </div>
                 </div>
 
                 {/* Book / Update Button */}
                 <div className="text-center">
-                    <button
-                        onClick={handleBooking}
-                        disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId || (selectedDate && availableTimeSlotsForDisplay.find(slot => slot.value === selectedTime)?.disabled)}
-                        className={`px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
-                            (selectedDate && selectedTime && !isLoadingBookings && userId && !(selectedDate && availableTimeSlotsForDisplay.find(slot => slot.value === selectedTime)?.disabled))
-                                ? 'bg-gradient-to-r from-orange-600 to-orange-800 text-white hover:from-orange-700 hover:to-orange-900 shadow-lg hover:shadow-xl transform hover:scale-105'
-                                : 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                        }`}
-                    >
-                        {isLoadingBookings
-                            ? (editingBookingId ? 'Updating...' : 'Booking...')
-                            : (editingBookingId ? `📝 Update Booking - ${formatIDR(calculateTotal())}` : `🎵 Book DJ Studio - ${formatIDR(calculateTotal())}`)}
+                    <button onClick={handleBooking} disabled={!selectedDate || !selectedTime || isLoadingBookings || !userId || availableTimeSlotsForDisplay.find(s => s.value === selectedTime)?.disabled}
+                        className="px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-200 bg-gradient-to-r from-orange-600 to-orange-800 text-white hover:from-orange-700 hover:to-orange-900 shadow-lg hover:shadow-xl transform hover:scale-105 disabled:bg-gray-600 disabled:from-gray-600 disabled:to-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed disabled:transform-none">
+                        {isLoadingBookings ? (editingBookingId ? 'Updating...' : 'Booking...') : (editingBookingId ? `📝 Update Booking - ${formatIDR(calculateTotal())}` : `🎵 Book DJ Studio - ${formatIDR(calculateTotal())}`)}
                     </button>
-                    {editingBookingId && (
-                        <button
-                            onClick={() => {
-                                setEditingBookingId(null);
-                                setSelectedDate('');
-                                setSelectedTime('');
-                                setDuration(2);
-                                setSelectedEquipment([]);
-                                setSelectedPaymentMethod('cash');
-                                setError(null);
-                                setConflictError(null);
-                                setConflictingSlots([]);
-                                setShowConflictModal(false);
-                            }}
-                            className="ml-4 px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
-                        >
-                            Cancel Edit
-                        </button>
-                    )}
+                    {editingBookingId && <button onClick={() => setEditingBookingId(null)} className="ml-4 px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600">Cancel Edit</button>}
                 </div>
 
                 {/* Recent Bookings Section */}
-                {userId ? (
-                    isLoadingBookings && bookings.length === 0 && !error ? (
-                        <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
-                            Loading bookings...
-                        </div>
-                    ) : bookings.length > 0 ? (
-                        <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 border border-gray-700">
-                            <h2 className="text-2xl font-semibold text-orange-300 mb-6">
-                                📋 Recent Bookings
-                            </h2>
+                {userId && (
+                    <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 border border-gray-700">
+                        <h2 className="text-2xl font-semibold text-orange-300 mb-6">📋 Your Bookings</h2>
+                        {isLoadingBookings && bookings.length === 0 ? <p className="text-gray-400">Loading bookings...</p> :
+                         bookings.length > 0 ? (
                             <div className="space-y-4">
                                 {bookings.map(booking => (
                                     <div key={booking.id} className="bg-gray-700 rounded-lg p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-600">
                                         <div className="flex-grow mb-4 sm:mb-0">
-                                            <p className="font-medium text-gray-100">Booking ID: <span className="font-mono text-xs text-gray-400">{booking.id}</span></p>
-                                            <p className="text-sm text-gray-300">
-                                                {formatDate(booking.date)} at {formatTime(booking.time)} ({booking.duration} hours)
-                                            </p>
-                                            <p className="text-xs text-gray-400">
-                                                Equipment: {booking.equipment && booking.equipment.length > 0 ? booking.equipment.map(e => e.name).join(', ') : 'None selected'}
-                                            </p>
-                                            <p className="text-xs text-gray-400 mt-1">
-                                                Payment: {booking.paymentMethod === 'online' ? 'Online' : 'Cash'}
-                                                <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                                    booking.paymentStatus === 'paid' ? 'bg-green-700 text-green-200' : 'bg-yellow-700 text-yellow-200'
-                                                }`}>
-                                                    {booking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
-                                                </span>
-                                            </p>
+                                            <p className="font-medium text-gray-100">{formatDate(booking.date)} at {formatTime(booking.time)}</p>
+                                            <p className="text-xs text-gray-400 mt-1">Payment: {booking.paymentMethod} - <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${booking.paymentStatus === 'paid' ? 'bg-green-700 text-green-200' : 'bg-yellow-700 text-yellow-200'}`}>{booking.paymentStatus}</span></p>
                                         </div>
-                                        <div className="text-right">
+                                        <div className="flex items-center gap-2">
                                             <p className="font-bold text-orange-400">{formatIDR(booking.total)}</p>
-                                            <p className="text-xs text-gray-400">
-                                                Booked by: <span className="font-semibold text-orange-200">{booking.userName || (booking.userId ? booking.userId.substring(0, 8) + '...' : 'N/A')}</span>
-                                            </p>
-                                        </div>
-                                        <div className="flex flex-col sm:flex-row gap-2 mt-2 sm:mt-0 sm:ml-4">
-                                            {/* Only show edit/cancel if current user is the booking owner */}
-                                            {userId === booking.userId && (
-                                                <>
-                                                    <button
-                                                        onClick={() => handleEditBooking(booking)}
-                                                        className="px-4 py-2 bg-orange-500 text-white rounded-xl text-sm hover:bg-orange-600 transition duration-200"
-                                                    >
-                                                        Edit
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleCancelBooking(booking)}
-                                                        className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm hover:bg-red-700 transition duration-200"
-                                                    >
-                                                        Cancel
-                                                    </button>
-                                                </>
-                                            )}
+                                            <button onClick={() => handleEditBooking(booking)} className="px-3 py-1.5 bg-orange-500 text-white rounded-lg text-sm hover:bg-orange-600">Edit</button>
+                                            <button onClick={() => handleCancelBooking(booking)} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">Cancel</button>
                                         </div>
                                     </div>
                                 ))}
                             </div>
-                        </div>
-                    ) : (
-                        !isLoadingBookings && bookings.length === 0 && !error && (
-                            <div className="bg-gray-800 shadow-2xl rounded-2xl p-8 mt-6 text-center text-gray-400 border border-gray-700">
-                                No recent bookings found. Make your first booking above!
-                            </div>
-                        )
-                    )
-                ) : (
-                    <button
-                        onClick={() => setShowAuthModal(true)}
-                        className="px-6 py-3 bg-orange-600 text-white rounded-xl text-lg font-semibold hover:bg-orange-700 transition duration-200 shadow-lg mt-6 block mx-auto"
-                    >
-                        Sign In / Sign Up to View Bookings
-                    </button>
-                )}
-
-
-                {/* Confirmation Modal */}
-                {showConfirmation && currentBooking && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <div className="text-center">
-                                <div className="text-6xl mb-4 pulse-animation">🎉</div>
-                                <h2 className="text-2xl font-bold text-orange-400 mb-4">
-                                    {editingBookingId ? 'Booking Updated!' : 'Booking Confirmed!'}
-                                </h2>
-                                <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
-                                    <p><strong>Date:</strong> {formatDate(currentBooking.date)}</p>
-                                    <p><strong>Time:</strong> {formatTime(currentBooking.time)}</p>
-                                    <p><strong>Duration:</strong> {currentBooking.duration} hours</p>
-                                    <p><strong>Equipment:</strong> {currentBooking.equipment && currentBooking.equipment.length > 0 ? currentBooking.equipment.map(e => e.name).join(', ') : 'None selected'}</p>
-                                    <p><strong>Total:</strong> {formatIDR(currentBooking.total)}</p>
-                                    <p><strong>Booking ID:</strong> <span className="font-mono text-xs text-gray-400">#{currentBooking.id}</span></p>
-                                    <p className="mt-2"><strong>Payment Method:</strong> {currentBooking.paymentMethod === 'online' ? 'Online' : 'Cash on Arrival'}</p>
-                                    <p><strong>Payment Status:</strong>
-                                        <span className={`ml-1 font-semibold ${currentBooking.paymentStatus === 'paid' ? 'text-green-400' : 'text-yellow-400'}`}>
-                                            {currentBooking.paymentStatus === 'paid' ? 'PAID' : 'PENDING'}
-                                        </span>
-                                    </p>
-                                    <p className="mt-2"><strong>Booked By:</strong> <span className="font-semibold text-orange-200">{currentBooking.userName || 'N/A'}</span></p>
-                                </div>
-                                <button
-                                    onClick={() => setShowConfirmation(false)}
-                                    className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 transition duration-200"
-                                >
-                                    Awesome! Close
-                                </button>
-                            </div>
-                        </div>
+                         ) : <p className="text-gray-400">No bookings yet. Make one above!</p>
+                        }
                     </div>
                 )}
 
-                {/* Auth Modal */}
-                {showAuthModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
-                                {isLoginMode ? 'Sign In' : 'Sign Up'}
-                            </h2>
-                            {authError && (
-                                <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4 text-sm" role="alert">
-                                    {authError}
-                                </div>
-                            )}
-                            <div className="space-y-4">
-                                <div>
-                                    <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-2">Email</label>
-                                    <input
-                                        type="email"
-                                        id="email"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                        placeholder="your.email@example.com"
-                                    />
-                                </div>
-                                <div>
-                                    <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">Password</label>
-                                    <input
-                                        type="password"
-                                        id="password"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                        placeholder="********"
-                                    />
-                                </div>
-                            </div>
-                            <div className="mt-6 space-y-4">
-                                <button
-                                    onClick={isLoginMode ? handleSignIn : handleSignUp}
-                                    className="w-full px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition duration-200"
-                                >
-                                    {isLoginMode ? 'Sign In' : 'Sign Up'}
-                                </button>
-                                <button
-                                    onClick={() => setIsLoginMode(prev => !prev)}
-                                    className="w-full px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
-                                >
-                                    {isLoginMode ? 'Need an account? Sign Up' : 'Already have an account? Sign In'}
-                                </button>
-                                {/* Google Sign-In Button */}
-                                <button
-                                    onClick={handleGoogleSignIn}
-                                    className="w-full px-6 py-3 bg-red-700 text-white rounded-xl font-semibold hover:bg-red-800 transition duration-200 flex items-center justify-center"
-                                >
-                                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google logo" className="w-5 h-5 mr-2" />
-                                    Sign In with Google
-                                </button>
-                                <button
-                                    onClick={() => { setShowAuthModal(false); setAuthError(null); setEmail(''); setPassword(''); }}
-                                    className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Profile Management Modal */}
-                {showProfileModal && userId && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">
-                                Manage Profile
-                            </h2>
-                            {profileError && (
-                                <div className="bg-red-800 text-white px-4 py-3 rounded-xl relative mb-4 text-sm" role="alert">
-                                    {profileError}
-                                </div>
-                            )}
-                            <div className="space-y-4">
-                                <div>
-                                    <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-2">Display Name</label>
-                                    <input
-                                        type="text"
-                                        id="displayName"
-                                        value={newDisplayName}
-                                        onChange={(e) => setNewDisplayName(e.target.value)}
-                                        className="w-full p-3 border border-gray-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent transition duration-200 bg-gray-700 text-white"
-                                        placeholder="Your Name"
-                                    />
-                                </div>
-                            </div>
-                            <div className="mt-6 space-y-4">
-                                <button
-                                    onClick={handleUpdateProfile}
-                                    disabled={profileLoading}
-                                    className="w-full px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition duration-200"
-                                >
-                                    {profileLoading ? 'Updating...' : 'Update Profile'}
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        setShowProfileModal(false);
-                                        setProfileError(null);
-                                        setNewDisplayName(userName);
-                                    }}
-                                    className="w-full text-sm text-gray-400 hover:text-gray-200 transition duration-200 mt-2"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-
-                {/* Payment Simulation Modal */}
-                {showPaymentSimulationModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700">
-                            <h2 className="text-2xl font-bold text-orange-400 mb-4">
-                                Simulate Online Payment
-                            </h2>
-                            <p className="text-gray-300 mb-6">
-                                Please confirm payment of **{formatIDR(calculateTotal())}** for your booking on {formatDate(selectedDate)} at {formatTime(selectedTime)}.
-                            </p>
-                            <div className="flex justify-center gap-4">
-                                <button
-                                    onClick={() => {
-                                        setShowPaymentSimulationModal(false);
-                                        // Directly call handleBooking to re-trigger the backend call
-                                        // with the implicit payment status (which will be 'pending' from selectedPaymentMethod)
-                                        // The backend will then update it to 'paid' if the confirmation logic is there.
-                                        handleBooking();
-                                    }}
-                                    className="px-6 py-3 bg-green-700 text-white rounded-xl font-semibold hover:bg-green-800 transition duration-200"
-                                >
-                                    Confirm Payment (Simulated)
-                                </button>
-                                <button
-                                    onClick={() => { setShowPaymentSimulationModal(false); setError("Payment cancelled by user."); }}
-                                    className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Delete Confirmation Modal */}
-                {showDeleteConfirmation && bookingToDelete && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white text-center border border-gray-700">
-                            <h2 className="text-2xl font-bold text-red-400 mb-4">
-                                Confirm Deletion
-                            </h2>
-                            <p className="text-gray-300 mb-6">
-                                Are you sure you want to cancel the booking for **{formatDate(bookingToDelete.date)} at {formatTime(bookingToDelete.time)}** (Booking ID: <span className="font-mono text-xs text-gray-400">{bookingToDelete.id.substring(0,8)}...</span>)? This action cannot be undone.
-                            </p>
-                            <div className="flex justify-center gap-4">
-                                <button
-                                    onClick={confirmDeleteBooking}
-                                    className="px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition duration-200"
-                                >
-                                    Yes, Cancel Booking
-                                </button>
-                                <button
-                                    onClick={() => { setShowDeleteConfirmation(false); setBookingToDelete(null); setError(null); }}
-                                    className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 transition duration-200"
-                                >
-                                    No, Keep Booking
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Conflict Modal */}
-                {showConflictModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-                        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700">
-                            <div className="text-center">
-                                <div className="text-6xl mb-4">⚠️</div>
-                                <h2 className="text-2xl font-bold text-red-400 mb-4">
-                                    Booking Conflict!
-                                </h2>
-                                {conflictError && (
-                                    <p className="text-gray-300 mb-4">{conflictError}</p>
-                                )}
-                                {conflictingSlots.length > 0 && (
-                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
-                                        <p className="font-semibold mb-2">Conflicting bookings:</p>
-                                        <ul className="list-disc list-inside space-y-1">
-                                            {conflictingSlots.map((slot, index) => (
-                                                <li key={index}>
-                                                    {formatTime(slot.time)} for {slot.duration} hours (by {slot.userName})
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                )}
-                                {availableTimeSlotsForDisplay.length > 0 && (
-                                    <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200">
-                                        <p className="font-semibold mb-2">Available slots for {formatDate(selectedDate)} (Duration: {duration}h):</p>
-                                        <div className="flex flex-wrap gap-2 justify-center">
-                                            {availableTimeSlotsForDisplay.map(slot => (
-                                                <span
-                                                    key={slot.value}
-                                                    onClick={() => {
-                                                        if (!slot.disabled) { // Only allow selection if not disabled
-                                                            setSelectedTime(slot.value);
-                                                            setShowConflictModal(false); // Close modal and re-attempt booking
-                                                            setConflictError(null);
-                                                            setConflictingSlots([]);
-                                                        }
-                                                    }}
-                                                    // Add class for disabled slots in modal for consistency
-                                                    className={`px-3 py-1 rounded-full text-sm cursor-pointer transition duration-200 ${
-                                                        slot.disabled ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-green-700 text-green-100 hover:bg-green-600'
-                                                    }`}
-                                                >
-                                                    {slot.label}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                {selectedDate && availableTimeSlotsForDisplay.every(slot => slot.disabled) && (
-                                     <p className="text-orange-300 text-sm mt-2">No alternative available slots found for this date and duration.</p>
-                                )}
-                                <button
-                                    onClick={() => { setShowConflictModal(false); setConflictError(null); setConflictingSlots([]); }}
-                                    className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 transition duration-200"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
+                {/* Modals */}
+                <AuthModal show={showAuthModal} onClose={() => setShowAuthModal(false)} isLoginMode={isLoginMode} setIsLoginMode={setIsLoginMode} email={email} setEmail={setEmail} password={password} setPassword={setPassword} handleAuthAction={handleAuthAction} handleGoogleSignIn={handleGoogleSignIn} authError={authError} />
+                <ProfileModal show={showProfileModal} onClose={() => setShowProfileModal(false)} newDisplayName={newDisplayName} setNewDisplayName={setNewDisplayName} handleUpdateProfile={handleUpdateProfile} profileLoading={profileLoading} profileError={profileError} />
+                <ConfirmationModal show={showConfirmation} onClose={() => setShowConfirmation(false)} booking={currentBooking} isUpdate={!!editingBookingId} />
+                <DeleteConfirmationModal show={showDeleteConfirmation} onClose={() => setShowDeleteConfirmation(false)} booking={bookingToDelete} onConfirm={confirmDeleteBooking} />
             </div>
         </div>
     );
 }
+
+// --- Sub-components for Modals and UI elements for better readability ---
+
+const EquipmentItem = ({ equipment, isSelected, onToggle }) => (
+    <div onClick={() => onToggle(equipment)} className={`p-3 rounded-xl cursor-pointer border-2 transition-all ${isSelected ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
+        <div className="flex items-center space-x-3">
+            <div className="text-2xl">{equipment.icon}</div>
+            <div>
+                <h4 className="font-semibold text-white">{equipment.name}</h4>
+                <p className="text-sm text-gray-400">{equipment.type}</p>
+            </div>
+            {isSelected && <div className="ml-auto w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-white">✓</div>}
+        </div>
+    </div>
+);
+
+const PaymentOption = ({ value, label, selected, onSelect }) => (
+    <div onClick={() => onSelect(value)} className={`p-4 rounded-xl cursor-pointer border-2 transition-all ${selected === value ? 'border-orange-500 bg-orange-900' : 'border-gray-700 bg-gray-700 hover:border-orange-400'}`}>
+        <label className="flex items-center space-x-3 cursor-pointer">
+            <input type="radio" name="paymentMethod" value={value} checked={selected === value} onChange={() => onSelect(value)} className="form-radio h-5 w-5 text-orange-600 bg-gray-800 border-gray-600 focus:ring-orange-500" />
+            <span className="font-medium text-white">{label}</span>
+        </label>
+    </div>
+);
+
+const Modal = ({ show, onClose, title, children }) => {
+    if (!show) return null;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
+            <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700" onClick={e => e.stopPropagation()}>
+                <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">{title}</h2>
+                {children}
+            </div>
+        </div>
+    );
+};
+
+const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail, password, setPassword, handleAuthAction, handleGoogleSignIn, authError }) => (
+    <Modal show={show} onClose={onClose} title={isLoginMode ? 'Sign In' : 'Sign Up'}>
+        {authError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{authError}</div>}
+        <div className="space-y-4">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
+        </div>
+        <div className="mt-6 space-y-3">
+            <button onClick={() => handleAuthAction(isLoginMode ? () => signInWithEmailAndPassword(getAuth(), email, password) : () => createUserWithEmailAndPassword(getAuth(), email, password))} className="w-full py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700">
+                {isLoginMode ? 'Sign In' : 'Sign Up'}
+            </button>
+            <button onClick={handleGoogleSignIn} className="w-full py-3 bg-red-700 text-white rounded-xl font-semibold hover:bg-red-800 flex items-center justify-center gap-2">
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google logo" className="w-5 h-5" /> Sign In with Google
+            </button>
+            <button onClick={() => setIsLoginMode(p => !p)} className="w-full py-2 text-sm text-gray-400 hover:text-white">{isLoginMode ? 'Need an account? Sign Up' : 'Have an account? Sign In'}</button>
+        </div>
+    </Modal>
+);
+
+const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handleUpdateProfile, profileLoading, profileError }) => (
+    <Modal show={show} onClose={onClose} title="Manage Profile">
+        {profileError && <div className="bg-red-800 text-white px-4 py-2 rounded-lg mb-4 text-sm">{profileError}</div>}
+        <input type="text" value={newDisplayName} onChange={e => setNewDisplayName(e.target.value)} placeholder="Your Display Name" className="w-full p-3 border border-gray-600 rounded-xl bg-gray-700 text-white" />
+        <div className="mt-6 flex gap-4">
+            <button onClick={onClose} className="w-full py-3 bg-gray-600 text-white rounded-xl font-semibold hover:bg-gray-700">Cancel</button>
+            <button onClick={handleUpdateProfile} disabled={profileLoading} className="w-full py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 disabled:bg-gray-500">{profileLoading ? 'Updating...' : 'Update'}</button>
+        </div>
+    </Modal>
+);
+
+const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
+    if (!booking) return null;
+    return (
+        <Modal show={show} onClose={onClose} title={isUpdate ? 'Booking Updated!' : 'Booking Confirmed!'}>
+            <div className="text-center">
+                <div className="text-6xl mb-4 pulse-animation">🎉</div>
+                <div className="text-left bg-gray-700 rounded-lg p-4 mb-6 text-gray-200 space-y-1">
+                    <p><strong>Date:</strong> {formatDate(booking.date)}</p>
+                    <p><strong>Time:</strong> {formatTime(booking.time)}</p>
+                    <p><strong>Total:</strong> {formatIDR(booking.total)}</p>
+                    <p><strong>Status:</strong> <span className="font-semibold text-yellow-400">PENDING</span></p>
+                </div>
+                <button onClick={onClose} className="bg-orange-600 text-white px-6 py-3 rounded-xl hover:bg-orange-700 w-full">Awesome!</button>
+            </div>
+        </Modal>
+    );
+};
+
+const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
+    if (!booking) return null;
+    return (
+        <Modal show={show} onClose={onClose} title="Confirm Cancellation">
+            <p className="text-gray-300 mb-6 text-center">Are you sure you want to cancel your booking for {formatDate(booking.date)} at {formatTime(booking.time)}?</p>
+            <div className="flex justify-center gap-4">
+                <button onClick={onClose} className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 w-full">No, Keep It</button>
+                <button onClick={onConfirm} className="px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 w-full">Yes, Cancel</button>
+            </div>
+        </Modal>
+    );
+};
 
 export default BookingApp;

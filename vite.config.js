@@ -1,11 +1,16 @@
 // vite.config.js
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '',
-  // No explicit 'css' block needed here for PostCSS/Tailwind,
-  // Vite will automatically discover postcss.config.js
-})
+  optimizeDeps: {
+    include: ['moment'], // Add moment here
+  },
+  build: {
+    // Potentially needed if optimizeDeps.include alone isn't enough
+    // rollupOptions: {
+    //   external: ['moment'], // Only if you want to completely exclude it from the bundle (advanced)
+    // }
+  }
+});
