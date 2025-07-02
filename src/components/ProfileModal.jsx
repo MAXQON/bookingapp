@@ -9,7 +9,7 @@ const Modal = ({ show, onClose, title, children }) => {
         </div>
     );
 };
-export Modal;
+export const Modal;
 
 
 
