@@ -69,13 +69,13 @@ def _initialize_firebase():
         print(f"Loaded credentials from: {SERVICE_ACCOUNT_KEY_PATH}")
 
         # Initialize Firebase Admin SDK
-        # Correctly check if any Firebase app has been initialized
-        if not firebase_admin.apps.get_apps(): # Corrected: Use firebase_admin.apps.get_apps()
+        # This is the most robust way to check if an app is already initialized
+        try:
+            firebase_admin_app = firebase_admin.get_app() # Tries to get the default app
+            print("Firebase Admin SDK already initialized, reusing existing app.")
+        except ValueError: # This error is raised if no default app is initialized
             firebase_admin_app = firebase_admin.initialize_app(creds)
             print("Firebase Admin SDK initialized.")
-        else:
-            firebase_admin_app = firebase_admin.apps.get_app() # Corrected: Use firebase_admin.apps.get_app()
-            print("Firebase Admin SDK already initialized, reusing existing app.")
 
 
         # Initialize Firestore DB client
