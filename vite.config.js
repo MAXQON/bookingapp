@@ -8,11 +8,8 @@ export default defineConfig({
   optimizeDeps: {
     include: ['moment', 'moment-timezone'],
   },
-  // IMPORTANT: Add this line to tell Vite to expose REACT_APP_ variables
-  envPrefix: 'REACT_APP_', // This makes process.env.REACT_APP_ accessible
+  envPrefix: 'REACT_APP_',
 
-  // Alternatively, if envPrefix doesn't work for some reason, you can use 'define'
-  // This is more verbose but explicitly sets them:
   // define: {
   //   'process.env.REACT_APP_FIREBASE_API_KEY': JSON.stringify(process.env.REACT_APP_FIREBASE_API_KEY),
   //   'process.env.REACT_APP_FIREBASE_AUTH_DOMAIN': JSON.stringify(process.env.REACT_APP_FIREBASE_AUTH_DOMAIN),
