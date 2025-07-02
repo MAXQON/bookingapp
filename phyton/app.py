@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 # --- Firebase Admin SDK Imports ---
 import firebase_admin
 from firebase_admin import credentials, auth
+from firebase_admin import apps # Import apps module specifically
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -68,11 +69,14 @@ def _initialize_firebase():
         print(f"Loaded credentials from: {SERVICE_ACCOUNT_KEY_PATH}")
 
         # Initialize Firebase Admin SDK
-        if not firebase_admin.apps:
+        # Correctly check if any Firebase app has been initialized
+        if not apps.get_apps(): # Changed from firebase_admin.apps to apps.get_apps()
             firebase_admin_app = firebase_admin.initialize_app(creds)
             print("Firebase Admin SDK initialized.")
         else:
-            firebase_admin_app = firebase_admin.get_app() # Get existing app if already initialized
+            firebase_admin_app = apps.get_app() # Get existing app if already initialized
+            print("Firebase Admin SDK already initialized, reusing existing app.")
+
 
         # Initialize Firestore DB client
         db = firestore.Client(credentials=creds, project=creds.project_id)
@@ -469,7 +473,7 @@ def confirm_payment():
         return jsonify({"error": str(e)}), 401
     except Exception as e:
         print(f"Error in confirm_payment: {e}")
-        return jsonify({"error": "An internal error occurred."}), 500
+        return jsonify({"error": "An internal error occurred.", "details": str(e)}), 500
 
 
 def send_booking_confirmation_email(to_email, booking_details, booking_id, is_update=False, is_payment_confirmation=False):
