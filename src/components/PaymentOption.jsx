@@ -6,4 +6,4 @@ const PaymentOption = ({ value, label, selected, onSelect }) => (
         </label>
     </div>
 );
-export const PaymentOption;
+export PaymentOption;

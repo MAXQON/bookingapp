@@ -15,4 +15,4 @@ const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
         </Modal>
     );
 };
-export default ConfirmationModal;
+export ConfirmationModal;

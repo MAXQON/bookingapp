@@ -10,4 +10,4 @@ const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
         </Modal>
     );
 };
-export const DeleteConfirmationModal;
+export DeleteConfirmationModal;

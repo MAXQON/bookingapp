@@ -10,4 +10,4 @@ const EquipmentItem = ({ equipment, isSelected, onToggle }) => (
         </div>
     </div>
 );
-export const EquipmentItem;
+export EquipmentItem;

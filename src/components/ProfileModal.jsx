@@ -9,7 +9,7 @@ const Modal = ({ show, onClose, title, children }) => {
         </div>
     );
 };
-export const Modal;
+export Modal;
 
 
 
@@ -24,4 +24,4 @@ const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handle
         </div>
     </Modal>
 );
-export const ProfileModal;
+export ProfileModal;
