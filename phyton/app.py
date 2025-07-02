@@ -110,14 +110,24 @@ except ValueError as e:
 
 @app.before_request
 def verify_token():
-    """Verifies the Firebase ID token from the Authorization header."""
+    """Verifies the Firebase ID token from the Authorization header.
+    Allows specific routes to bypass token verification."""
+    # List of routes that do NOT require authentication
+    unauthenticated_routes = [
+        '/api/check-booked-slots',
+        # Add other routes that should be publicly accessible here
+    ]
+
+    # If the current request path is in the unauthenticated_routes list, skip token verification
+    if request.path in unauthenticated_routes:
+        return
+
     auth_header = request.headers.get('Authorization')
     if not auth_header:
-        # Allow unauthenticated access for certain routes if needed, or return 401
-        # For this app, we require authentication for most API calls
-        if request.path.startswith('/api/'): # Only apply to API routes
+        # For all other /api/ routes, an Authorization header is required
+        if request.path.startswith('/api/'):
              return jsonify({"error": "Authorization header missing."}), 401
-        return # Allow non-API routes to proceed without auth
+        return # Allow non-API routes (like '/') to proceed without auth
 
     try:
         id_token_str = auth_header.split(' ')[1]
@@ -237,7 +247,7 @@ def confirm_booking():
                 f'Duration: {booking_data["duration"]} hours\n'
                 f'Equipment: {", ".join([eq["name"] for eq in booking_data["equipment"]])}\n'
                 f'Total: {booking_data["total"]}\n'
-                f'Status: {booking_data["paymentStatus"]}\n' # Corrected: Changed 'paymentStatus'' to 'paymentStatus'
+                f'Status: {booking_data["paymentStatus"]}\n'
                 f'User ID: {g.user_id}'
             ),
             'start': {
