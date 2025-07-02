@@ -17,4 +17,4 @@ const AuthModal = ({ show, onClose, isLoginMode, setIsLoginMode, email, setEmail
         </div>
     </Modal>
 );
-export AuthModal;
+export const AuthModal;
