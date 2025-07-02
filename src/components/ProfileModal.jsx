@@ -1,18 +1,6 @@
-const Modal = ({ show, onClose, title, children }) => {
-    if (!show) return null;
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
-            <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full text-white border border-gray-700" onClick={e => e.stopPropagation()}>
-                <h2 className="text-2xl font-bold text-orange-400 mb-6 text-center">{title}</h2>
-                {children}
-            </div>
-        </div>
-    );
-};
-export const Modal;
-
-
-
+// src/components/ProfileModal.jsx
+import React from 'react';
+import Modal from './Modal'; // Import the base Modal component
 
 const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handleUpdateProfile, profileLoading, profileError }) => (
     <Modal show={show} onClose={onClose} title="Manage Profile">
@@ -24,4 +12,5 @@ const ProfileModal = ({ show, onClose, newDisplayName, setNewDisplayName, handle
         </div>
     </Modal>
 );
-export ProfileModal;
+
+export default ProfileModal;
