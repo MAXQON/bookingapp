@@ -20,7 +20,20 @@ from googleapiclient.errors import HttpError
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app) # Enable CORS for all routes
+CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True) # Configure CORS
+
+@app.route('/api/check-booked-slots', methods=['GET'])
+def check_booked_slots():
+    # Your backend logic
+    return jsonify({"bookedSlots": []})
+
+@app.route('/api/confirm-booking', methods=['POST'])
+def confirm_booking():
+    # Your backend logic
+    return jsonify({"message": "Booking confirmed!"})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=os.environ.get("PORT", 5000))
 
 # --- UPDATED: Firebase/Google Cloud Credentials from Render Secret File ---
 # Render mounts secret files at /etc/secrets/<filename>.
