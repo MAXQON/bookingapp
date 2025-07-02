@@ -39,6 +39,7 @@ mail = Mail(app)
 
 # --- CORS Configuration ---
 # IMPORTANT: Configure CORS to explicitly allow your frontend domain
+# Ensure this is applied to all requests, including error responses.
 CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True)
 
 # --- Firebase/Google Cloud Credentials from Render Secret File ---
@@ -112,7 +113,6 @@ except ValueError as e:
 def verify_token():
     """Verifies the Firebase ID token from the Authorization header.
     Allows specific routes to bypass token verification."""
-    # List of routes that do NOT require authentication
     # Using startswith for robustness, as request.path might include query parameters
     # or have a trailing slash depending on how the request is formed.
     if request.path.startswith('/api/check-booked-slots'):
@@ -122,7 +122,15 @@ def verify_token():
     if not auth_header:
         # For all other /api/ routes, an Authorization header is required
         if request.path.startswith('/api/'):
-             return jsonify({"error": "Authorization header missing."}), 401
+             # Create a response object and manually add CORS headers
+            response = jsonify({"error": "Authorization header missing."})
+            response.status_code = 401
+            # Manually add CORS headers to ensure they are present for this error response
+            response.headers['Access-Control-Allow-Origin'] = 'https://maxqoon.github.io'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            return response
         return # Allow non-API routes (like '/') to proceed without auth
 
     try:
@@ -134,7 +142,15 @@ def verify_token():
         print(f"User {g.user_id} authenticated.")
     except Exception as e:
         print(f"Token verification failed: {e}")
-        return jsonify({"error": "Invalid or expired token.", "details": str(e)}), 401
+        # Create a response object and manually add CORS headers for this error
+        response = jsonify({"error": "Invalid or expired token.", "details": str(e)})
+        response.status_code = 401
+        # Manually add CORS headers to ensure they are present for this error response
+        response.headers['Access-Control-Allow-Origin'] = 'https://maxqoon.github.io'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        return response
 
 
 @app.route('/api/update-profile', methods=['POST'])
