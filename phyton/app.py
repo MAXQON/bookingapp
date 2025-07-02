@@ -113,13 +113,9 @@ def verify_token():
     """Verifies the Firebase ID token from the Authorization header.
     Allows specific routes to bypass token verification."""
     # List of routes that do NOT require authentication
-    unauthenticated_routes = [
-        '/api/check-booked-slots',
-        # Add other routes that should be publicly accessible here
-    ]
-
-    # If the current request path is in the unauthenticated_routes list, skip token verification
-    if request.path in unauthenticated_routes:
+    # Using startswith for robustness, as request.path might include query parameters
+    # or have a trailing slash depending on how the request is formed.
+    if request.path.startswith('/api/check-booked-slots'):
         return
 
     auth_header = request.headers.get('Authorization')
