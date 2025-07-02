@@ -19,7 +19,7 @@ from googleapiclient.errors import HttpError
 # --- Firebase Admin SDK Imports ---
 import firebase_admin
 from firebase_admin import credentials, auth
-from firebase_admin import apps # Import apps module specifically
+# Removed: from firebase_admin import apps # This import caused the ImportError
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -70,11 +70,11 @@ def _initialize_firebase():
 
         # Initialize Firebase Admin SDK
         # Correctly check if any Firebase app has been initialized
-        if not apps.get_apps(): # Changed from firebase_admin.apps to apps.get_apps()
+        if not firebase_admin.apps.get_apps(): # Corrected: Use firebase_admin.apps.get_apps()
             firebase_admin_app = firebase_admin.initialize_app(creds)
             print("Firebase Admin SDK initialized.")
         else:
-            firebase_admin_app = apps.get_app() # Get existing app if already initialized
+            firebase_admin_app = firebase_admin.apps.get_app() # Corrected: Use firebase_admin.apps.get_app()
             print("Firebase Admin SDK already initialized, reusing existing app.")
 
 
@@ -238,7 +238,7 @@ def confirm_booking():
                 f'Equipment: {", ".join([eq["name"] for eq in booking_data["equipment"]])}\n'
                 f'Total: {booking_data["total"]}\n'
                 f'Payment Method: {booking_data["paymentMethod"]}\n'
-                f'Status: {booking_data["paymentStatus"]}\n'
+                f'Status: {booking_data["paymentStatus']}\n'
                 f'User ID: {g.user_id}'
             ),
             'start': {
