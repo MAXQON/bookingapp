@@ -23,7 +23,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure CORS to allow specific origins and credentials
-CORS(app, origins=["https://maxqoon.github.io", "http://localhost:3000"], supports_credentials=True)
+CORS(app, origins=["https://maxqoon.github.io", "https://booking-app-1af02.firebaseapp.com", "https://phyon-back-end.onrender.com", "http://localhost:3000"], supports_credentials=True)
 
 # --- Firebase/Google Cloud Credentials from Render Secret File ---
 # Render mounts secret files into the /etc/secrets/ directory.
