@@ -1,3 +1,9 @@
+// src/components/ConfirmationModal.jsx
+import React from 'react';
+import Modal from './Modal'; // Import the base Modal component
+import { formatIDR, formatDate, formatTime } from '../utils'; // Import utility functions
+
+// ConfirmationModal is defined as a const and then exported as default.
 const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
     if (!booking) return null;
     return (
@@ -15,4 +21,5 @@ const ConfirmationModal = ({ show, onClose, booking, isUpdate }) => {
         </Modal>
     );
 };
-export ConfirmationModal;
+
+export default ConfirmationModal;
