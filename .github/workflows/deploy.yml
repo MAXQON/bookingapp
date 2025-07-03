@@ -34,6 +34,8 @@ jobs:
           echo "Building with Firebase configuration:"
           echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
           echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:5}...${REACT_APP_FIREBASE_API_KEY: -4}"
+          echo "Auth Domain: ${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}"
+          echo "App ID: ${REACT_APP_FIREBASE_APP_ID:0:8}...${REACT_APP_FIREBASE_APP_ID: -4}"
           npm run build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
@@ -45,6 +47,13 @@ jobs:
           REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
           REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }}
 
+      - name: Verify Build Output
+        run: |
+          echo "Build contents:"
+          ls -la ./dist
+          echo "Checking Firebase config in built files:"
+          grep -r "firebaseConfig" ./dist || echo "No firebaseConfig found"
+      
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:

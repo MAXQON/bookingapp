@@ -25,9 +25,14 @@ export default defineConfig({
     include: ['moment', 'moment-timezone'], // Keep these for moment/moment-timezone resolution
   },
   build: {
-    // Keep or adjust your publish_dir if needed
-    // rollupOptions: {
-    //   external: ['moment', 'moment-timezone'],
-    // }
+    chunkSizeWarningLimit: 1000, // Increase threshold if acceptable
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          firebase: ['firebase/app', 'firebase/firestore', 'firebase/auth'],
+          vendor: ['react', 'react-dom', 'moment']
+        }
+      }
+    }
   }
 });
