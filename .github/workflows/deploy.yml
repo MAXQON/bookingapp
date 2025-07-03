@@ -22,13 +22,19 @@ jobs:
 
       - name: Install dependencies
         run: npm install
-
+        
+      - name: Verify Secrets
+        run: |
+            echo "Secrets available:"
+            echo "PROJECT_ID exists: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID != '' }}"
+            echo "API_KEY exists: ${{ secrets.REACT_APP_FIREBASE_API_KEY != '' }}"
+        
       - name: Build React App
-        run: 
+        run: |
             echo "Building with Firebase configuration:"
             echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
-            echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:4}...${REACT_APP_FIREBASE_API_KEY: -4}" # Shows first and last 4 chars
-            npm run build
+            echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:5}...${REACT_APP_FIREBASE_API_KEY: -4}" # Shows first 5 and last 4 chars
+        npm run build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
           REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
