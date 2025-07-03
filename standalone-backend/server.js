@@ -7,15 +7,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-<<<<<<< HEAD
 // googleapis is no longer needed here for Calendar, as it will be handled by Python backend
 // const { google } = require('googleapis');
 // fs is no longer needed here as we are not reading Calendar key file directly
 // const fs = require('fs');
-=======
 const { google } = require('googleapis'); // Import googleapis library
 const fs = require('fs'); // Import Node.js File System module
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
 
 // --- Environment Variables ---
 const encodedServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64;
@@ -69,11 +66,9 @@ try {
     process.exit(1);
 }
 
-<<<<<<< HEAD
 // Google Calendar API initialization removed from here.
 // It will be handled by the separate Python backend.
 let calendar = null; // Still declare, but will remain null
-=======
 // Initialize Google Calendar API client
 let calendar;
 // Wrap the async initialization in an immediately invoked async function
@@ -110,7 +105,6 @@ let calendar;
     }
 })(); // End of immediately invoked async function
 
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
 
 // Get references to Firestore and Auth services
 const db = admin.firestore();
@@ -256,7 +250,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         if (editingBookingId) {
             // If editing an existing booking, get its document reference
             bookingDocRef = bookingsCollectionRef.doc(editingBookingId);
-<<<<<<< HEAD
             await bookingDocRef.set({
                 ...bookingData,
                 userId: uid,
@@ -264,7 +257,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 timestamp: admin.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
             console.log(`Booking UPDATED in Firestore: ${editingBookingId}`);
-=======
             // Attempt to fetch the existing document to get its calendarEventId
             const existingBookingSnap = await bookingDocRef.get();
             if (existingBookingSnap.exists) {
@@ -282,7 +274,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 });
                 console.log(`Booking ${editingBookingId} not found, created as new with ID: ${bookingDocRef.id}`);
             }
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
         } else {
             // If it's a new booking, create a new document reference
             bookingDocRef = await bookingsCollectionRef.add({
@@ -294,7 +285,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             console.log(`Booking ADDED to Firestore: ${bookingDocRef.id}`);
         }
 
-<<<<<<< HEAD
         // --- 2. Call Python Backend for Google Calendar Event ---
         // Prepare data for the Python backend. Include relevant booking details
         // and the user's timezone if known from the frontend.
@@ -302,13 +292,11 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
             date: bookingData.date,
             time: bookingData.time,
             duration: bookingData.duration,
-=======
         // --- 2. Update Firestore Booking Data (after determining docRef) ---
         // Ensure the latest data is always saved to the document
         await bookingDocRef.set({
             ...bookingData,
             userId: uid,
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
             userName: userName,
             bookingId: editingBookingId || bookingDocRef.id, // Use existing or new Firestore ID
             equipment: bookingData.equipment,
@@ -332,7 +320,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         const pythonEndpoint = `${PYTHON_CALENDAR_BACKEND_URL}/api/confirm-booking`; // Python endpoint
         const pythonMethod = existingCalendarEventId ? 'PUT' : 'POST'; // Use PUT for update, POST for new
 
-<<<<<<< HEAD
         try {
             console.log(`Calling Python Calendar Backend (${pythonMethod}): ${pythonEndpoint}`);
             const pythonResponse = await fetch(pythonEndpoint, {
@@ -361,7 +348,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                     calendarEventId: pythonResponseData.calendarEventId
                 }, { merge: true });
                 console.log(`Firestore booking ${bookingDocRef.id} updated with Calendar Event ID: ${pythonResponseData.calendarEventId}`);
-=======
         // --- 3. Create/Update Google Calendar Event ---
         let newOrUpdatedCalendarEventId = existingCalendarEventId; // Start with existing ID
         if (calendar && googleCalendarId) {
@@ -434,7 +420,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
                 // Important: If a calendar error occurs, do NOT set calendarEventId to null in Firestore
                 // It means the event either failed to be created/updated, or the existing one is still there.
                 // We let `newOrUpdatedCalendarEventId` retain its value (null or old ID) if the operation fails.
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
             }
 
         } catch (pythonCallError) {
@@ -448,12 +433,9 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         res.status(200).json({
             success: true,
             message: editingBookingId ? 'Booking updated and calendar event (attempted)!' : 'Booking confirmed and calendar event (attempted)!',
-<<<<<<< HEAD
             bookingId: bookingDocRef.id
-=======
             bookingId: bookingDocRef.id,
             calendarEventId: newOrUpdatedCalendarEventId // Send the new/updated calendar event ID back
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
         });
 
     } catch (error) {
@@ -466,9 +448,6 @@ app.post('/api/confirm-booking', verifyFirebaseToken, async (req, res) => {
         return res.status(500).json({ error: 'Failed to confirm booking or create calendar event.', details: error.message });
     }
 });
-
-<<<<<<< HEAD
-=======
 /**
  * DELETE /api/cancel-calendar-event
  * Handles deleting an event from Google Calendar.
@@ -503,7 +482,6 @@ app.delete('/api/cancel-calendar-event', verifyFirebaseToken, async (req, res) =
     }
 });
 
->>>>>>> parent of 8006246 (Google Calendar Timezone Fix)
 
 // Start the server
 app.listen(port, () => {
