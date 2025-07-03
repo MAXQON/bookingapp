@@ -34,7 +34,7 @@ jobs:
             echo "Building with Firebase configuration:"
             echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
             echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:5}...${REACT_APP_FIREBASE_API_KEY: -4}" # Shows first 5 and last 4 chars
-        npm: run build
+        run: npm build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
           REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
