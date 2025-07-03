@@ -32,12 +32,13 @@ import PaymentOption from './components/PaymentOption';
 
 
 // --- Canvas Environment Variables ---
-const APP_ID_FOR_FIRESTORE_PATH = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const INITIAL_AUTH_TOKEN_FROM_CANVAS = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const APP_ID_FOR_FIRESTORE_PATH = process.env.REACT_APP_FIREBASE_PROJECT_ID || 'booking-app';
+const INITIAL_AUTH_TOKEN_FROM_CANVAS = null;
 
 // --- Backend API Base URL ---
 // IMPORTANT: For production, this should also be an environment variable.
 const BACKEND_API_BASE_URL = 'https://phyon-back-end.onrender.com';
+
 
 
 // --- Main Booking Application Component ---
@@ -89,7 +90,32 @@ function BookingApp() {
 
     // Ref for scrolling to the booking form
     const bookingFormRef = useRef(null);
-
+	
+	
+	useEffect(() => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Runtime Firebase Config:', firebaseConfig);
+      
+      // Simple check for placeholder values
+      Object.entries(firebaseConfig).forEach(([key, value]) => {
+        if (!value || value.includes('YOUR_') || value.includes('example')) {
+          console.error(`Invalid Firebase ${key}: ${value}`);
+        }
+      });
+    }
+  }, []);
+  
+	// Temporary production debug (remove after verification)
+	useEffect(() => {
+	if (process.env.NODE_ENV === 'production') {
+		console.log('Production Firebase Config (partial):', {
+		projectId: firebaseConfig.projectId,
+		authDomain: firebaseConfig.authDomain,
+		appId: firebaseConfig.appId?.slice(0, 5) + '...' // Don't log full sensitive values
+		});
+	}
+	}, []);
+	
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
         if (!firebaseAppInstance) {

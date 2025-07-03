@@ -1,3 +1,4 @@
+// src/firebaseConfig.js
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
   authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
@@ -7,4 +8,33 @@ const firebaseConfig = {
   appId: process.env.REACT_APP_FIREBASE_APP_ID,
   measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID
 };
+
+// Add validation and logging
+const validateConfig = (config) => {
+  const requiredKeys = [
+    'apiKey', 'authDomain', 'projectId', 
+    'storageBucket', 'messagingSenderId', 'appId'
+  ];
+  
+  let isValid = true;
+  
+  requiredKeys.forEach(key => {
+    if (!config[key]) {
+      console.error(`Missing Firebase config: ${key}`);
+      isValid = false;
+    } else if (config[key].includes('YOUR_') || config[key].includes('example')) {
+      console.warn(`Firebase config ${key} may contain placeholder value: ${config[key]}`);
+    }
+  });
+
+  return isValid;
+};
+
+if (process.env.NODE_ENV !== 'production') {
+  console.log('Firebase Configuration:', firebaseConfig);
+  if (!validateConfig(firebaseConfig)) {
+    console.error('Invalid Firebase configuration detected!');
+  }
+}
+
 export default firebaseConfig;

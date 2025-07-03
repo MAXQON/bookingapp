@@ -24,7 +24,11 @@ jobs:
         run: npm install
 
       - name: Build React App
-        run: npm run build
+        run: 
+            echo "Building with Firebase configuration:"
+            echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
+            echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:4}...${REACT_APP_FIREBASE_API_KEY: -4}" # Shows first and last 4 chars
+            npm run build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
           REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
@@ -33,7 +37,7 @@ jobs:
           REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
           REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
           REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
-          # REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }} # Only if you use it
+          REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }} # Only if you use it
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
