@@ -455,85 +455,73 @@ function BookingApp() {
 
     // --- Handle User Profile Update ---
     const handleUpdateProfile = useCallback(async () => {
-        if (!userId || !authInstance.currentUser || !newDisplayName.trim()) return;
-        setProfileLoading(true);
-        setProfileError(null);
-        try {
-            const idToken = await authInstance.currentUser.getIdToken();
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/update-profile`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-                body: JSON.stringify({ displayName: newDisplayName.trim() })
-            });
+    if (!userId || !authInstance.currentUser || !newDisplayName.trim()) return;
+    setProfileLoading(true);
+    setProfileError(null);
+    try {
+        const idToken = await authInstance.currentUser.getIdToken();
+        const response = await fetch(`${BACKEND_API_BASE_URL}/api/update-profile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+            body: JSON.stringify({ displayName: newDisplayName.trim() })
+        });
 
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to update profile.');
+        const data = await response.json();
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to update profile via backend.');
-            }
-
-            setUserName(newDisplayName.trim());
-            setShowProfileModal(false);
-        } catch (error) {
-            console.error("Error updating profile:", error);
-            setProfileError(`Failed to update profile: ${error.message}`);
-        } finally {
-            setProfileLoading(false);
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to update profile via backend.');
         }
-    }, [userId, authInstance, newDisplayName]);
 
+        setUserName(newDisplayName.trim());
+        setShowProfileModal(false);
+    } catch (error) {
+        console.error("Error updating profile:", error);
+        setProfileError(`Failed to update profile: ${error.message}`);
+    } finally {
+        setProfileLoading(false);
+    }
+}, [userId, authInstance, newDisplayName]);
     // --- Handle Booking Submission (new/update) ---
     const handleBooking = useCallback(async () => {
-        if (!selectedDate || !selectedTime || !userId || !authInstance.currentUser) {
-            setError('Please select date, time and be logged in to book.');
-            return;
-        }
-        setIsLoadingBookings(true);
-        setError(null);
-        try {
-            const idToken = await authInstance.currentUser.getIdToken();
-            const bookingDataToSend = {
-                date: selectedDate, time: selectedTime, duration,
-                equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
-                total: calculateTotal(), paymentMethod: selectedPaymentMethod,
-                paymentStatus: 'pending',
-                userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-            };
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-                body: JSON.stringify({ bookingData: bookingDataToSend, userName, editingBookingId })
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to confirm booking.');
-            
-            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, timestamp: new Date() });
+    if (!selectedDate || !selectedTime || !userId || !authInstance.currentUser) {
+        setError('Please select date, time and be logged in to book.');
+        return;
+    }
+    setIsLoadingBookings(true);
+    setError(null);
+    try {
+        const idToken = await authInstance.currentUser.getIdToken();
+        const bookingDataToSend = {
+            date: selectedDate, time: selectedTime, duration,
+            equipment: selectedEquipment.map(eq => ({ id: eq.id, name: eq.name, type: eq.type })),
+            total: calculateTotal(), paymentMethod: selectedPaymentMethod,
+            paymentStatus: 'pending',
+            userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        };
+        const response = await fetch(`${BACKEND_API_BASE_URL}/api/confirm-booking`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+            body: JSON.stringify({ bookingData: bookingDataToSend, userName, editingBookingId })
+        });
+        
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to confirm booking.');
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to confirm booking via backend.');
-            }
-
-            // Backend returns success and the actual booking ID (Firestore ID)
-            setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: paymentStatus });
-            setShowConfirmation(true);
-            setEditingBookingId(null);
-            setSelectedDate('');
-            setSelectedTime('');
-            setDuration(2);
-            setSelectedEquipment([]);
-        } catch (bookingError) {
-            console.error("Error calling backend for booking:", bookingError);
-            setError(`Failed to book session: ${bookingError.message}`);
-        } finally {
-            setIsLoadingBookings(false);
-        }
-    }, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, userName, editingBookingId, selectedPaymentMethod]);
-
+        // Backend returns success and the actual booking ID (Firestore ID)
+        setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: 'pending' });
+        setShowConfirmation(true);
+        setEditingBookingId(null);
+        setSelectedDate('');
+        setSelectedTime('');
+        setDuration(2);
+        setSelectedEquipment([]);
+    } catch (bookingError) {
+        console.error("Error calling backend for booking:", bookingError);
+        setError(`Failed to book session: ${bookingError.message}`);
+    } finally {
+        setIsLoadingBookings(false);
+    }
+}, [selectedDate, selectedTime, duration, selectedEquipment, calculateTotal, userId, authInstance, userName, editingBookingId, selectedPaymentMethod]);
     const handleEditBooking = useCallback((booking) => {
         setEditingBookingId(booking.id);
         setSelectedDate(booking.date);
