@@ -25,6 +25,7 @@ export default defineConfig({
     include: ['moment', 'moment-timezone'], // Keep these for moment/moment-timezone resolution
   },
   build: {
+	target: 'esnext',
     chunkSizeWarningLimit: 1000, // Increase threshold if acceptable
     rollupOptions: {
       output: {

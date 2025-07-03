@@ -116,6 +116,15 @@ function BookingApp() {
 	}
 	}, []);
 	
+	useEffect(() => {
+  if (import.meta.env.PROD) {
+    console.log('Production Firebase Config:', {
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID?.slice(0, 3) + '...',
+      appId: import.meta.env.VITE_FIREBASE_APP_ID?.slice(0, 3) + '...'
+    })
+  }
+}, [])
+	
     // --- EFFECT 1: Initialize Firebase App, Firestore, and Auth ---
     useEffect(() => {
         if (!firebaseAppInstance) {
