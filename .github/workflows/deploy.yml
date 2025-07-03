@@ -22,38 +22,22 @@ jobs:
 
       - name: Install dependencies
         run: npm install
-        
-      - name: Verify Secrets
-        run: |
-          echo "Secrets available:"
-          echo "PROJECT_ID exists: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID != '' }}"
-          echo "API_KEY exists: ${{ secrets.REACT_APP_FIREBASE_API_KEY != '' }}"
-        
+
       - name: Build React App
-        run: |
-          echo "Verifying Vite environment:"
-          echo "VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID:0:3}..."
-          npm run build
+        run: npm run build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
-          VITE_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
-          VITE_APP_FIREBASE_AUTH_DOMAIN: ${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}
-          VITE_APP_FIREBASE_PROJECT_ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}
-          VITE_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
-          VITE_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
-          VITE_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }}
+          REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
+          REACT_APP_FIREBASE_AUTH_DOMAIN: ${{ secrets.REACT_APP_FIREBASE_AUTH_DOMAIN }}
+          REACT_APP_FIREBASE_PROJECT_ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}
+          REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
+          REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
+          REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
+          # REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }} # Only if you use it
 
-      - name: Verify Build Output
-        run: |
-          echo "Build contents:"
-          ls -la ./dist
-          echo "Checking Firebase config in built files:"
-          grep -r "firebaseConfig" ./dist || echo "No firebaseConfig found"
-      
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build # Changed from ./dist to match Create React App's default
+          publish_dir: ./dist # Or ./build
           publish_branch: gh-pages
