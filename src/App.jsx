@@ -465,10 +465,9 @@ function BookingApp() {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                 body: JSON.stringify({ displayName: newDisplayName.trim() })
             });
-<<<<<<< HEAD
+
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Failed to update profile.');
-=======
 
             const data = await response.json();
 
@@ -476,7 +475,6 @@ function BookingApp() {
                 throw new Error(data.error || 'Failed to update profile via backend.');
             }
 
->>>>>>> parent of 29ba34b (fixed google calendar api)
             setUserName(newDisplayName.trim());
             setShowProfileModal(false);
         } catch (error) {
@@ -509,12 +507,10 @@ function BookingApp() {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
                 body: JSON.stringify({ bookingData: bookingDataToSend, userName, editingBookingId })
             });
-<<<<<<< HEAD
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Failed to confirm booking.');
             
             setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, timestamp: new Date() });
-=======
 
             const data = await response.json();
 
@@ -524,7 +520,6 @@ function BookingApp() {
 
             // Backend returns success and the actual booking ID (Firestore ID)
             setCurrentBooking({ ...bookingDataToSend, id: data.bookingId, userName: userName, timestamp: new Date(), paymentStatus: paymentStatus });
->>>>>>> parent of 29ba34b (fixed google calendar api)
             setShowConfirmation(true);
             setEditingBookingId(null);
             setSelectedDate('');
