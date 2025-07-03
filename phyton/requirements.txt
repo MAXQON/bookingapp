@@ -1,7 +1,0 @@
-Flask
-Flask-Cors
-google-api-python-client
-firebase-admin
-requests
-pytz
-gunicorn
