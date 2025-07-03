@@ -25,16 +25,16 @@ jobs:
         
       - name: Verify Secrets
         run: |
-            echo "Secrets available:"
-            echo "PROJECT_ID exists: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID != '' }}"
-            echo "API_KEY exists: ${{ secrets.REACT_APP_FIREBASE_API_KEY != '' }}"
+          echo "Secrets available:"
+          echo "PROJECT_ID exists: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID != '' }}"
+          echo "API_KEY exists: ${{ secrets.REACT_APP_FIREBASE_API_KEY != '' }}"
         
       - name: Build React App
-      run: |
-        echo "Building with Firebase configuration:"
-        echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
-        echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:5}...${REACT_APP_FIREBASE_API_KEY: -4}"
-        npm run build
+        run: |
+          echo "Building with Firebase configuration:"
+          echo "Project ID: ${{ secrets.REACT_APP_FIREBASE_PROJECT_ID }}"
+          echo "API Key: ${REACT_APP_FIREBASE_API_KEY:0:5}...${REACT_APP_FIREBASE_API_KEY: -4}"
+          npm run build
         env:
           # These will now be correctly pulled from your 'github-pages' environment secrets
           REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
@@ -43,11 +43,11 @@ jobs:
           REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ secrets.REACT_APP_FIREBASE_STORAGE_BUCKET }}
           REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
           REACT_APP_FIREBASE_APP_ID: ${{ secrets.REACT_APP_FIREBASE_APP_ID }}
-          REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }} # Only if you use it
+          REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ secrets.REACT_APP_FIREBASE_MEASUREMENT_ID }}
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist # Or ./build
+          publish_dir: ./build # Changed from ./dist to match Create React App's default
           publish_branch: gh-pages
