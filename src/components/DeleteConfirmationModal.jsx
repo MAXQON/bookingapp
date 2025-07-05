@@ -7,7 +7,7 @@ import { formatDate, formatTime } from '../utils'; // Import utility functions
 const DeleteConfirmationModal = ({ show, onClose, booking, onConfirm }) => {
     if (!booking) return null;
     return (
-        <Modal show={show} onClose={onClose} title="Confirm Cancellation">
+        <Modal show={show} onClose={() => setShowDeleteConfirmation(false)} title="Confirm Cancellation">
             <p className="text-gray-300 mb-6 text-center">Are you sure you want to cancel your booking for {formatDate(booking.date)} at {formatTime(booking.time)}?</p>
             <div className="flex justify-center gap-4">
                 <button onClick={onClose} className="px-6 py-3 bg-gray-700 text-gray-300 rounded-xl font-semibold hover:bg-gray-600 w-full">No, Keep It</button>
