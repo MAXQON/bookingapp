@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 # Firebase Service Account Key
-/standalone-backend/serviceAccountKey.json
+
 
 # Environment variables for backend
 /standalone-backend/.env
